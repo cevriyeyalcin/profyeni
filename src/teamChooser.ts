@@ -68,23 +68,24 @@ export const startSelection = (): void => {
   chooserState.isActive = true;
   chooserState.availableSpectators = spectators.map(p => toAug(p));
   
-  // Determine which team needs players more
+  // Determine which teams can choose based on balance
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
   if (redCount < blueCount) {
+    // Red team is disadvantaged, only they can choose until balanced
     chooserState.waitingForRed = true;
     chooserState.waitingForBlue = false;
     lastFirstTeam = 1; // Red went first
   } else if (blueCount < redCount) {
+    // Blue team is disadvantaged, only they can choose until balanced
     chooserState.waitingForRed = false;
     chooserState.waitingForBlue = true;
     lastFirstTeam = 2; // Blue went first
   } else {
-    // Equal teams, both teams can choose simultaneously
+    // Teams are equal, both teams can choose simultaneously
     chooserState.waitingForRed = true;
     chooserState.waitingForBlue = true;
-    // Note: We'll handle the selection order by whoever selects first
   }
   
   sendSpectatorList();
@@ -145,13 +146,24 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   console.log(`[TEAM_CHOOSER] Red team:`, red.map(p => `${p.name}(${p.id})`));
   console.log(`[TEAM_CHOOSER] Blue team:`, blue.map(p => `${p.name}(${p.id})`));
   
-  const isRedTeamMember = chooserState.waitingForRed && red.some(p => p.id === player.id);
-  const isBlueTeamMember = chooserState.waitingForBlue && blue.some(p => p.id === player.id);
+  const playerIsInRed = red.some(p => p.id === player.id);
+  const playerIsInBlue = blue.some(p => p.id === player.id);
   
-  console.log(`[TEAM_CHOOSER] Player ${player.name} - isRedTeamMember: ${isRedTeamMember}, isBlueTeamMember: ${isBlueTeamMember}`);
+  // Check if this player's team is allowed to select
+  const isRedTeamMember = chooserState.waitingForRed && playerIsInRed;
+  const isBlueTeamMember = chooserState.waitingForBlue && playerIsInBlue;
+  
+  console.log(`[TEAM_CHOOSER] Player ${player.name} - In Red: ${playerIsInRed}, In Blue: ${playerIsInBlue}`);
+  console.log(`[TEAM_CHOOSER] Can select - Red allowed: ${isRedTeamMember}, Blue allowed: ${isBlueTeamMember}`);
   
   if (!isRedTeamMember && !isBlueTeamMember) {
-    sendMessage("❌ Şu anda sizin takımınızın seçim sırası değil.", player);
+    if (playerIsInRed && !chooserState.waitingForRed) {
+      sendMessage("❌ Kırmızı takım şu anda seçim yapamaz. Mavi takım daha az oyuncuya sahip.", player);
+    } else if (playerIsInBlue && !chooserState.waitingForBlue) {
+      sendMessage("❌ Mavi takım şu anda seçim yapamaz. Kırmızı takım daha az oyuncuya sahip.", player);
+    } else {
+      sendMessage("❌ Şu anda sizin takımınızın seçim sırası değil.", player);
+    }
     return true; // Consume the message
   }
   
@@ -205,18 +217,23 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
     const newRedCount = getRedPlayers().length;
     const newBlueCount = getBluePlayers().length;
     
+    console.log(`[TEAM_CHOOSER] After selection - Red: ${newRedCount}, Blue: ${newBlueCount}`);
+    
     if (newRedCount < newBlueCount) {
-      // Red team needs more players
+      // Red team is disadvantaged, only they can choose until balanced
       chooserState.waitingForRed = true;
       chooserState.waitingForBlue = false;
+      console.log(`[TEAM_CHOOSER] Red team disadvantaged, only red can choose`);
     } else if (newBlueCount < newRedCount) {
-      // Blue team needs more players
+      // Blue team is disadvantaged, only they can choose until balanced
       chooserState.waitingForRed = false;
       chooserState.waitingForBlue = true;
+      console.log(`[TEAM_CHOOSER] Blue team disadvantaged, only blue can choose`);
     } else {
-      // Teams are equal, both can choose
+      // Teams are equal, both can choose simultaneously
       chooserState.waitingForRed = true;
       chooserState.waitingForBlue = true;
+      console.log(`[TEAM_CHOOSER] Teams equal, both can choose`);
     }
     
     sendSpectatorList();
