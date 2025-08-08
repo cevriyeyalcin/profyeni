@@ -149,6 +149,23 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   const playerIsInRed = red.some(p => p.id === player.id);
   const playerIsInBlue = blue.some(p => p.id === player.id);
   
+  // Check current team counts to prevent uneven teams
+  const currentRedCount = red.length;
+  const currentBlueCount = blue.length;
+  
+  // Additional safeguard: Don't allow a team to choose if it would create a 2+ player difference
+  if (playerIsInRed && currentRedCount > currentBlueCount) {
+    sendMessage("❌ Kırmızı takım şu anda seçim yapamaz. Takımlar dengelenmelidir.", player);
+    console.log(`[TEAM_CHOOSER] Blocked red selection - would create uneven teams (${currentRedCount+1}v${currentBlueCount})`);
+    return true;
+  }
+  
+  if (playerIsInBlue && currentBlueCount > currentRedCount) {
+    sendMessage("❌ Mavi takım şu anda seçim yapamaz. Takımlar dengelenmelidir.", player);
+    console.log(`[TEAM_CHOOSER] Blocked blue selection - would create uneven teams (${currentRedCount}v${currentBlueCount+1})`);
+    return true;
+  }
+  
   // Check if this player's team is allowed to select
   const isRedTeamMember = chooserState.waitingForRed && playerIsInRed;
   const isBlueTeamMember = chooserState.waitingForBlue && playerIsInBlue;
@@ -210,12 +227,26 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
     chooserState.selectionTimeout = null;
   }
   
-  // Check if we should continue or end selection
-  const shouldContinue = checkContinueSelection();
+  // Calculate new team counts manually (more reliable than getRedPlayers/getBluePlayers)
+  const currentRed = getRedPlayers();
+  const currentBlue = getBluePlayers();
+  
+  // Add the newly assigned player to the count
+  const newRedCount = targetTeam === 1 ? currentRed.length + 1 : currentRed.length;
+  const newBlueCount = targetTeam === 2 ? currentBlue.length + 1 : currentBlue.length;
+  
+  console.log(`[TEAM_CHOOSER] Manual count calculation - Red: ${newRedCount}, Blue: ${newBlueCount}`);
+  
+  // Check if we should continue or end selection based on new counts
+  const specCount = chooserState.availableSpectators.length;
+  const shouldContinue = specCount > 0 && 
+         (newRedCount < 6 && newBlueCount < 6) && 
+         Math.abs(newRedCount - newBlueCount) <= 1;
+         
+  console.log(`[TEAM_CHOOSER] Should continue with manual calculation: ${shouldContinue}`);
+  
   if (shouldContinue) {
     // Determine who should choose next based on team balance
-    const newRedCount = getRedPlayers().length;
-    const newBlueCount = getBluePlayers().length;
     
     console.log(`[TEAM_CHOOSER] After selection - Red: ${newRedCount}, Blue: ${newBlueCount}`);
     
@@ -223,17 +254,17 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
       // Red team is disadvantaged, only they can choose until balanced
       chooserState.waitingForRed = true;
       chooserState.waitingForBlue = false;
-      console.log(`[TEAM_CHOOSER] Red team disadvantaged, only red can choose`);
+      console.log(`[TEAM_CHOOSER] Red team disadvantaged (${newRedCount}v${newBlueCount}), only red can choose`);
     } else if (newBlueCount < newRedCount) {
       // Blue team is disadvantaged, only they can choose until balanced
       chooserState.waitingForRed = false;
       chooserState.waitingForBlue = true;
-      console.log(`[TEAM_CHOOSER] Blue team disadvantaged, only blue can choose`);
+      console.log(`[TEAM_CHOOSER] Blue team disadvantaged (${newRedCount}v${newBlueCount}), only blue can choose`);
     } else {
       // Teams are equal, both can choose simultaneously
       chooserState.waitingForRed = true;
       chooserState.waitingForBlue = true;
-      console.log(`[TEAM_CHOOSER] Teams equal, both can choose`);
+      console.log(`[TEAM_CHOOSER] Teams equal (${newRedCount}v${newBlueCount}), both can choose`);
     }
     
     sendSpectatorList();
@@ -251,13 +282,18 @@ const checkContinueSelection = (): boolean => {
   const blueCount = getBluePlayers().length;
   const specCount = chooserState.availableSpectators.length;
   
+  console.log(`[TEAM_CHOOSER] checkContinueSelection - Red: ${redCount}, Blue: ${blueCount}, Specs: ${specCount}`);
+  
   // Continue if:
   // 1. There are still spectators available
-  // 2. Teams are not full (6 max per team)
-  // 3. Teams need balancing
-  return specCount > 0 && 
+  // 2. Teams are not full (6 max per team)  
+  // 3. Teams don't exceed a 1 player difference (prevents uneven teams)
+  const shouldContinue = specCount > 0 && 
          (redCount < 6 && blueCount < 6) && 
          Math.abs(redCount - blueCount) <= 1;
+         
+  console.log(`[TEAM_CHOOSER] Should continue: ${shouldContinue}`);
+  return shouldContinue;
 };
 
 // Update spectator list (remove players who left)
