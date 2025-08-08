@@ -41,6 +41,61 @@ interface StreakRecords {
   top10Records: StreakRecord[];
 }
 
+const getFieldZone = (x: number, y: number): string => {
+  // Saha bölgelerini tanımla
+  if (x < -100) return "Sol Kale Önü";
+  if (x > 100) return "Sağ Kale Önü"; 
+  if (x < -50) return "Sol Savunma";
+  if (x > 50) return "Sağ Savunma";
+  if (y > 30) return "Üst Orta Saha";
+  if (y < -30) return "Alt Orta Saha";
+  return "Merkez";
+};
+
+const getTrajectoryDescription = (angleDiff: number, speedPercent: number): string => {
+  let trajectory = "";
+  
+  // Açı açıklaması
+  if (Math.abs(angleDiff) < 5) {
+    trajectory += "Düz gidiş";
+  } else if (angleDiff > 0) {
+    trajectory += `${angleDiff.toFixed(0)}° sola kavis`;
+  } else {
+    trajectory += `${Math.abs(angleDiff).toFixed(0)}° sağa kavis`;
+  }
+  
+  // Hız açıklaması
+  if (speedPercent > 20) {
+    trajectory += ", hızlı";
+  } else if (speedPercent < -10) {
+    trajectory += ", yavaş";
+  } else {
+    trajectory += ", normal";
+  }
+  
+  return trajectory;
+};
+
+const getSpeedBar = (speed: number): string => {
+  const level = Math.min(Math.floor(speed / 2), 10);
+  return "🔥".repeat(level) + "⚪".repeat(10 - level);
+};
+
+const getSpinBar = (spin: number): string => {
+  const level = Math.min(Math.floor(spin / 1.5), 10);
+  return "🌀".repeat(level) + "⚪".repeat(10 - level);
+};
+
+const getPowerBar = (power: number): string => {
+  const level = Math.min(Math.floor(power), 10);
+  return "⚡".repeat(level) + "⚪".repeat(10 - level);
+};
+
+const getCurveBar = (curve: number): string => {
+  const level = Math.min(Math.floor(curve / 2), 10);
+  return "🌊".repeat(level) + "⚪".repeat(10 - level);
+};
+
 const STREAK_RECORDS_FILE = "streak_records.json";
 
 // Win streak tracking
@@ -165,7 +220,13 @@ export class Game {
   lastTouch: lastTouch | null;
   previousTouch: previousTouch | null;
   lastKick: PlayerObject | null;
-  ballRotation: { x: number; y: number; power: number };
+  ballRotation: { 
+    x: number; 
+    y: number; 
+    power: number;
+    targetPower?: number;      
+    accelerationRate?: number;  
+  };
   positionsDuringPass: PlayerObject[];
   skipOffsideCheck: boolean;
   holdPlayers: holdPlayer[];
@@ -206,7 +267,13 @@ export class Game {
     this.previousTouch = null;
     this.lastKick = null;
     this.animation = false;
-    this.ballRotation = { x: 0, y: 0, power: 0 };
+    this.ballRotation = { 
+    x: 0, 
+    y: 0, 
+    power: 0,
+    targetPower: 0,        
+    accelerationRate: 0    
+  };
     this.positionsDuringPass = [];
     this.skipOffsideCheck = false;
     this.holdPlayers = JSON.parse(JSON.stringify(players.map(p => { return { id: p.id, auth: p.auth, team: p.team }})))
@@ -264,12 +331,14 @@ export class Game {
       pAug.sliding = false;
       
       // Güç yükleme sistemi - Durumlara göre farklı davranış
-      if (this.gameState === "throw_in" || this.gameState === "penalty") { // Taç atışı ve penaltıda güç yok
+      if (this.gameState === "throw_in" || this.gameState === "penalty") { 
+        // Taç atışı ve penaltıda güç yok
         this.ballTouchDuration = 0;
         this.lastTouchingPlayer = null;
         pAug.powerLevel = 0;
         room.setPlayerAvatar(p.id, "");
-      } else { // Diğer durumlar için güç yükleme var
+      } else { 
+        // Diğer durumlar için güç yükleme var
         if (this.lastTouchingPlayer?.id === p.id) {
           this.ballTouchDuration += 1/60; // Her tick 1/60 saniye
         } else {
@@ -278,7 +347,7 @@ export class Game {
           this.lastTouchingPlayer = p;
         }
         
-        // Güç seviyesini hesapla (1 saniye bekle, sonra 0.8 saniyede 1 level)
+        // Güç seviyesini hesapla - KADEMELİ SİSTEM
         let maxPower = 5; // Varsayılan maksimum güç
         
         // Durumlara göre maksimum güç sınırı
@@ -294,29 +363,26 @@ export class Game {
         // 0.5 saniye bekle, sonra güç yüklemeye başla
         let powerLevel = 0;
         if (this.ballTouchDuration >= 0.5) {
-          // 0.5 saniye sonra 0.8 saniyede bir level artır
-          powerLevel = Math.min(Math.floor((this.ballTouchDuration - 0.5) / 0.8) + 1, maxPower);
+          // KADEMELİ ARTIŞ: Her 0.15 saniyede 0.1 güç artır
+          const elapsedAfterWait = this.ballTouchDuration - 0.5;
+          powerLevel = Math.min(1.0 + (elapsedAfterWait / 0.15) * 0.1, maxPower);
+          
+          // Ondalık basamağı yuvarla (1.0, 1.1, 1.2... 5.0)
+          powerLevel = Math.round(powerLevel * 10) / 10;
         }
         
-        // Avatar güncelle
-        const powerAvatars = ["", "①", "②", "③", "④", "⑤"];
-        room.setPlayerAvatar(p.id, powerAvatars[powerLevel] || "");
+        // Avatar güncelle - ondalık gösterim
+        let avatar = "";
+        if (powerLevel >= 1.0) {
+          avatar = powerLevel.toFixed(1); // "1.0", "1.1", "2.5" gibi
+        }
+        room.setPlayerAvatar(p.id, avatar);
         
         // Güç seviyesini kaydet
         pAug.powerLevel = powerLevel;
       }
       
       handleLastTouch(this, pAug);
-    }
-
-    // Teamplay kontrolleri
-    if ((this.lastKick?.team == p.team) || !this.inPlay) { continue }
-    const distPredicted = Math.sqrt(((prop.x+prop.xspeed*2) - (ball.x+ball.xspeed*2)) ** 2 + ((prop.y+prop.yspeed*2) - (ball.y+ball.yspeed*2)) ** 2);
-    const isAlmostTouching = distPredicted < prop.radius + ball.radius + 5;
-    if (isAlmostTouching) {
-      this.boostCount = 0;
-      this.lastKick = null;
-      setBallInvMassAndColor(this);
     }
   }
   
@@ -646,111 +712,304 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   if (game) {
     const pp = toAug(p);
     
-    // Power shot uygula - SADECE güç seviyesi 0'dan büyükse
-    if (pp.powerLevel > 0) {
-      // Hemen uygula, setTimeout kullanma
-      const ball = room.getDiscProperties(0);
-      if (ball) {
-        let speedMultiplier = 1;
-        let spinPower = 0;
+    // GÜÇ 0 KONTROLÜ
+    if (pp.powerLevel === 0) {
+      // SADECE bu sistemler çalışır
+      teamplayBoost(game, p);
+      handleLastTouch(game, pp);
+      
+      if (pp.activation > 20) {
+        pp.activation = 0;
+        room.setPlayerAvatar(p.id, "");
+      }
+      return;
+    }
+    
+    // DETAYLI ANALIZ İÇİN VERİLERİ TOPLA
+    const ball = room.getDiscProperties(0);
+    const playerDisc = room.getPlayerDiscProperties(p.id);
+    
+    if (ball && playerDisc) {
+      // VURUŞ ÖNCESİ DURUM
+      const initialBallPos = { x: ball.x, y: ball.y };
+      const initialBallSpeed = { x: ball.xspeed, y: ball.yspeed };
+      const initialBallTotalSpeed = Math.sqrt(ball.xspeed ** 2 + ball.yspeed ** 2);
+      const playerPos = { x: playerDisc.x, y: playerDisc.y };
+      const playerSpeed = Math.sqrt(playerDisc.xspeed ** 2 + playerDisc.yspeed ** 2);
+      
+      // DEĞİŞKENLERİ TANIMLA
+      let speedMultiplier = 1;
+      let spinPower = 0;
+      let spinDirection = { x: 0, y: 0 };
+      
+      // Vuruş açısını hesapla
+      const dx = ball.x - playerDisc.x;
+      const dy = ball.y - playerDisc.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Normalize edilmiş vuruş vektörü
+      const hitX = dx / distance;
+      const hitY = dy / distance;
+      
+      // Vuruş açısı (derece cinsinden)
+      const hitAngleDegrees = Math.atan2(dy, dx) * 180 / Math.PI;
+      
+      // Oyuncunun hareket açısı
+      let playerMoveAngleDegrees = 0;
+      let angleCoefficient = 0;
+      
+      if (playerSpeed > 0.1) {
+        // Oyuncunun hareket vektörü
+        const moveX = playerDisc.xspeed / playerSpeed;
+        const moveY = playerDisc.yspeed / playerSpeed;
         
-                 // Hızı ve falsoyu ayarla
-         const props = room.getPlayerDiscProperties(p.id);
-         let hasSpin = false;
-         
-         // Hareket kontrolü - Falso için
-         if (props && (Math.abs(props.xspeed) > 0.1 || Math.abs(props.yspeed) > 0.1)) {
-           hasSpin = true;
-         }
-         
-         // Hızları ayarla (Falsolu ve düz vuruşlar için ayrı)
-         if (hasSpin) {
-           // Falsolu vuruş hızları
-           switch(pp.powerLevel) {
-             case 1:
-               speedMultiplier = 1.15;
-               spinPower = 3;
-               break;
-             case 2:
-               speedMultiplier = 1.30;
-               spinPower = 5;
-               break;
-             case 3:
-               speedMultiplier = 1.50;
-               spinPower = 7;
-               break;
-             case 4:
-               speedMultiplier = 1.70;
-               spinPower = 15; // Güçlü falso
-               break;
-             case 5:
-               speedMultiplier = 1.89;
-               spinPower = 20; // Çok güçlü falso
-               break;
-           }
-           
-           // Falso uygula
-           if (props) {
-             const spMagnitude = Math.sqrt(props.xspeed ** 2 + props.yspeed ** 2);
-             const vecXsp = props.xspeed / spMagnitude;
-             const vecYsp = props.yspeed / spMagnitude;
-             
-             game.ballRotation = {
-               x: -vecXsp,
-               y: -vecYsp,
-               power: spinPower
-             };
-           }
-         } else {
-           // Düz vuruş hızları (Falso yok)
-           switch(pp.powerLevel) {
-             case 1:
-               speedMultiplier = 1.10;
-               break;
-             case 2:
-               speedMultiplier = 1.22;
-               break;
-             case 3:
-               speedMultiplier = 1.26;
-               break;
-             case 4:
-               speedMultiplier = 1.32;
-               break;
-             case 5:
-               speedMultiplier = 1.44;
-               break;
-           }
-           
-           // Düz vuruşta falso sıfırla
-           game.ballRotation = {
-             x: 0,
-             y: 0,
-             power: 0
-           };
-         }
+        // Oyuncunun hareket açısı
+        playerMoveAngleDegrees = Math.atan2(playerDisc.yspeed, playerDisc.xspeed) * 180 / Math.PI;
         
-        // Hız çarpanlarını göster
-        console.log(`Power Level ${pp.powerLevel}: Speed multiplier = ${speedMultiplier.toFixed(2)}x, Spin: ${hasSpin ? "Yes" : "No"}`);
+        // Cross product (vektörel çarpım) - yan vuruşu tespit için
+        const crossProduct = Math.abs(moveX * hitY - moveY * hitX);
+        angleCoefficient = crossProduct;
         
-        // Topu hızlandır
+        // Spin yönünü belirle
+        const crossSign = moveX * hitY - moveY * hitX;
+        
+        // Takım ve pozisyona göre akıllı spin yönü
+        if (p.team === 1) { // Kırmızı takım (sol taraf)
+          if (ball.y < 0) { // Top üstte
+            spinDirection.x = Math.abs(crossSign) * 0.7;
+            spinDirection.y = Math.abs(crossSign) * 0.7;
+          } else { // Top altta
+            spinDirection.x = -Math.abs(crossSign) * 0.7;
+            spinDirection.y = -Math.abs(crossSign) * 0.7;
+          }
+        } else if (p.team === 2) { // Mavi takım (sağ taraf)
+          if (ball.y < 0) { // Top üstte
+            spinDirection.x = -Math.abs(crossSign) * 0.7;
+            spinDirection.y = Math.abs(crossSign) * 0.7;
+          } else { // Top altta
+            spinDirection.x = Math.abs(crossSign) * 0.7;
+            spinDirection.y = -Math.abs(crossSign) * 0.7;
+          }
+        }
+      }
+      
+      // FALSO VE DÜZ VURUŞ KARARI
+      const isFalso = angleCoefficient > 0.15;
+      let shotType = "DÜZ VURUŞ";
+      
+      if (isFalso) {
+        shotType = "FALSO";
+        
+        // KADEMELİ GÜÇ SİSTEMİ
+        const baseSpeed = 1.20;
+        const speedIncrement = 0.25;
+        speedMultiplier = baseSpeed + (pp.powerLevel - 1.0) * speedIncrement;
+        
+        // Spin gücü
+        const baseSpin = 2;
+        const spinIncrement = 2;
+        spinPower = (baseSpin + (pp.powerLevel - 1.0) * spinIncrement) * angleCoefficient;
+        spinPower = Math.min(spinPower, 15);
+        
+        // Spin uygula
+        game.ballRotation = {
+          x: spinDirection.x,
+          y: spinDirection.y,
+          power: spinPower,
+          targetPower: 0,
+          accelerationRate: 0
+        };
+        
+        // Top hızını ayarla
         room.setDiscProperties(0, {
           xspeed: ball.xspeed * speedMultiplier,
           yspeed: ball.yspeed * speedMultiplier,
-          invMass: defaults.ballInvMass * 0.8 // Topu hafiflet
+          invMass: defaults.ballInvMass
         });
         
-        console.log(`Power shot! Level: ${pp.powerLevel}, Speed: ${speedMultiplier}x, Spin: ${spinPower}`);
+        // Falso mesajı
+        if (spinPower > 8) {
+          room.setPlayerAvatar(p.id, "🌀");
+          setTimeout(() => room.setPlayerAvatar(p.id, ""), 800);
+        }
+        
+      } else {
+        // DÜZ VURUŞ
+        const baseSpeed = 1.20;
+        const speedIncrement = 0.35;
+        speedMultiplier = baseSpeed + (pp.powerLevel - 1.0) * speedIncrement;
+        
+        // Falsoyu tamamen sıfırla
+        game.ballRotation = {
+          x: 0,
+          y: 0,
+          power: 0,
+          targetPower: 0,
+          accelerationRate: 0
+        };
+        
+        // Normal hız uygula
+        room.setDiscProperties(0, {
+          xspeed: ball.xspeed * speedMultiplier,
+          yspeed: ball.yspeed * speedMultiplier,
+          invMass: defaults.ballInvMass * 0.9
+        });
       }
+      
+      // VURUŞ SONRASI DURUM - Çoklu ölçüm (falso etkisi zamanla görünür)
+      let measurementCount = 0;
+      const measurements: any[] = [];
+      
+      const measureBallState = () => {
+        const currentBall = room.getDiscProperties(0);
+        if (!currentBall) return;
+        
+        const currentSpeed = Math.sqrt(currentBall.xspeed ** 2 + currentBall.yspeed ** 2);
+        const currentAngle = Math.atan2(currentBall.yspeed, currentBall.xspeed) * 180 / Math.PI;
+        
+        measurements.push({
+          time: measurementCount * 100,
+          pos: { x: currentBall.x, y: currentBall.y },
+          speed: currentSpeed,
+          angle: currentAngle
+        });
+        
+        measurementCount++;
+        
+        if (measurementCount < 5) { // 5 ölçüm yap (0-400ms arası)
+          setTimeout(measureBallState, 100);
+        } else {
+          // Tüm ölçümler tamamlandı, analiz yap
+          analyzeFalsoEffect();
+        }
+      };
+      
+      const analyzeFalsoEffect = () => {
+        if (measurements.length < 2) return;
+        
+        const initialMeasurement = measurements[0];
+        const finalMeasurement = measurements[measurements.length - 1];
+        
+        const finalBallSpeed = finalMeasurement.speed;
+        const finalBallAngleDegrees = finalMeasurement.angle;
+        
+        // Hız değişimi analizi
+        const speedChange = finalBallSpeed - initialBallTotalSpeed;
+        const speedChangePercent = ((speedChange / initialBallTotalSpeed) * 100);
+        
+        // Açı değişimi analizi - İLK ÖLÇÜMLE KARŞILAŞTIR
+        const initialBallAngleDegrees = Math.atan2(initialBallSpeed.y, initialBallSpeed.x) * 180 / Math.PI;
+        let angleDifference = finalBallAngleDegrees - initialBallAngleDegrees;
+        
+        // Açı farkını -180 ile +180 arasında normalize et
+        if (angleDifference > 180) angleDifference -= 360;
+        if (angleDifference < -180) angleDifference += 360;
+        
+        // FALSO ETKİSİ ANALİZİ - Ölçümler arası açı değişimi
+        const angleChanges: number[] = [];
+        for (let i = 1; i < measurements.length; i++) {
+          let angleChange = measurements[i].angle - measurements[i-1].angle;
+          if (angleChange > 180) angleChange -= 360;
+          if (angleChange < -180) angleChange += 360;
+          angleChanges.push(angleChange);
+        }
+        
+        const totalAngleDeviation = angleChanges.reduce((sum, change) => sum + Math.abs(change), 0);
+        const maxAngleChange = Math.max(...angleChanges.map(Math.abs));
+        
+        // KALE MESAFE ANALİZİ
+        const goalX = p.team === 1 ? 1150 : -1150; // Sağ kale: 1150, Sol kale: -1150
+        const goalCenterY = 0;
+        const goalTop = -124;
+        const goalBottom = 124;
+        
+        const distanceToGoal = Math.sqrt((finalMeasurement.pos.x - goalX) ** 2 + (finalMeasurement.pos.y - goalCenterY) ** 2);
+        const willHitGoal = Math.abs(finalMeasurement.pos.y) <= 124 && 
+                           ((p.team === 1 && finalMeasurement.pos.x > goalX - 50) || 
+                            (p.team === 2 && finalMeasurement.pos.x < goalX + 50));
+        
+        // Takım bilgisi
+        const teamName = p.team === 1 ? "KIRMIZI" : p.team === 2 ? "MAVİ" : "SPEC";
+        const teamEmoji = p.team === 1 ? "🔴" : p.team === 2 ? "🔵" : "⚪";
+        
+        // Pozisyon bilgisi
+        const fieldZone = getFieldZone(playerPos.x, playerPos.y);
+        const ballZone = getFieldZone(initialBallPos.x, initialBallPos.y);
+        
+        // DETAYLI CONSOLE LOG
+        console.log(`\n🏆 ===== FALSO ANALİZİ ===== 🏆`);
+        console.log(`${teamEmoji} Oyuncu: ${extractRealUsername(p.name)} (${teamName} Takım)`);
+        console.log(`⚽ Güç Seviyesi: ${pp.powerLevel.toFixed(1)}/5.0 ${pp.powerLevel > 0 ? '⚡' : '⚪'}`);
+        console.log(`📍 Vuruş Türü: ${shotType} ${isFalso ? '🌀' : '➡️'}`);
+        
+        console.log(`\n📊 VURUŞ ÖNCESİ DURUM:`);
+        console.log(`  👤 Oyuncu Pos: (${playerPos.x.toFixed(1)}, ${playerPos.y.toFixed(1)}) - ${fieldZone}`);
+        console.log(`  ⚽ Top Pos: (${initialBallPos.x.toFixed(1)}, ${initialBallPos.y.toFixed(1)}) - ${ballZone}`);
+        console.log(`  🏃 Oyuncu Hızı: ${playerSpeed.toFixed(2)} (${playerMoveAngleDegrees.toFixed(1)}°)`);
+        console.log(`  ⚽ Top Hızı: ${initialBallTotalSpeed.toFixed(2)} (${initialBallAngleDegrees.toFixed(1)}°)`);
+        console.log(`  📐 Vuruş Açısı: ${hitAngleDegrees.toFixed(1)}°`);
+        console.log(`  🎯 Mesafe: ${distance.toFixed(2)}`);
+        
+        console.log(`\n🔬 VURUŞ ANALİZİ:`);
+        console.log(`  📈 Açı Katsayısı: ${angleCoefficient.toFixed(3)} (Eşik: 0.15)`);
+        console.log(`  ⚡ Hız Çarpanı: ${speedMultiplier.toFixed(2)}x`);
+        
+        if (isFalso) {
+          console.log(`  🌀 Spin Gücü: ${spinPower.toFixed(2)}/15`);
+          console.log(`  🎯 Spin Yönü: (${spinDirection.x.toFixed(2)}, ${spinDirection.y.toFixed(2)})`);
+          console.log(`  🔥 Falso Şiddeti: ${spinPower > 8 ? 'YÜKSEK 🌀' : 'ORTA 〰️'}`);
+        } else {
+          console.log(`  ➡️ Düz Vuruş - Spin YOK`);
+        }
+        
+        console.log(`\n📊 FALSO ETKİSİ ANALİZİ:`);
+        console.log(`  🔄 Toplam Açı Sapması: ${totalAngleDeviation.toFixed(2)}° (${measurements.length} ölçüm)`);
+        console.log(`  📈 Maksimum Anlık Sapma: ${maxAngleChange.toFixed(2)}°`);
+        console.log(`  📍 Yörünge Eğriliği: ${totalAngleDeviation > 2 ? 'EĞRI 🌀' : totalAngleDeviation > 0.5 ? 'HAFİF EĞRİ 〰️' : 'DÜZ ➡️'}`);
+        
+        // Ölçüm detayları
+        console.log(`\n📈 ZAMAN İÇİNDE DEĞİŞİM:`);
+        measurements.forEach((m, i) => {
+          const angleChangeStr = i > 0 ? ` (${angleChanges[i-1] > 0 ? '+' : ''}${angleChanges[i-1].toFixed(1)}°)` : '';
+          console.log(`  ${i*100}ms: Pos(${m.pos.x.toFixed(1)}, ${m.pos.y.toFixed(1)}) Hız:${m.speed.toFixed(1)} Açı:${m.angle.toFixed(1)}°${angleChangeStr}`);
+        });
+        
+        console.log(`\n📊 VURUŞ SONRASI DURUM:`);
+        console.log(`  ⚽ Son Top Hızı: ${finalBallSpeed.toFixed(2)} (${finalBallAngleDegrees.toFixed(1)}°)`);
+        console.log(`  📈 Hız Değişimi: ${speedChange > 0 ? '+' : ''}${speedChange.toFixed(2)} (${speedChangePercent > 0 ? '+' : ''}${speedChangePercent.toFixed(1)}%)`);
+        console.log(`  🔄 Net Açı Sapması: ${angleDifference > 0 ? '+' : ''}${angleDifference.toFixed(1)}°`);
+        
+        console.log(`\n🥅 KALE ANALİZİ:`);
+        console.log(`  🎯 Kaleye Mesafe: ${distanceToGoal.toFixed(1)} birim`);
+        console.log(`  📍 Son Pozisyon Y: ${finalMeasurement.pos.y.toFixed(1)} (Kale: -124 ile +124 arası)`);
+        console.log(`  ⚽ Kaleye Girecek mi: ${willHitGoal ? '✅ EVET' : '❌ HAYIR'}`);
+        if (!willHitGoal) {
+          const missDirection = finalMeasurement.pos.y > 124 ? 'ÜST' : finalMeasurement.pos.y < -124 ? 'ALT' : 'KALENIN ÖNÜ';
+          console.log(`  🎯 Iskalama Yönü: ${missDirection}`);
+        }
+        
+        console.log(`\n🎨 GÖRSELLEŞTİRME:`);
+        console.log(`  ${getSpeedBar(finalBallSpeed)} Hız: ${finalBallSpeed.toFixed(1)}`);
+        console.log(`  ${getSpinBar(spinPower)} Spin: ${spinPower.toFixed(1)}`);
+        console.log(`  ${getPowerBar(pp.powerLevel)} Güç: ${pp.powerLevel.toFixed(1)}`);
+        console.log(`  ${getCurveBar(totalAngleDeviation)} Eğrilik: ${totalAngleDeviation.toFixed(1)}°`);
+        
+        console.log(`\n🏁 SONUÇ ÖZET:`);
+        console.log(`  📍 ${shotType} - ${teamName} takımdan ${extractRealUsername(p.name)}`);
+        console.log(`  🎯 ${fieldZone} → ${getTrajectoryDescription(totalAngleDeviation, speedChangePercent)}`);
+        console.log(`  🥅 ${willHitGoal ? 'GOL POTANSİYELİ ⚽' : 'KAÇTI 😞'}`);
+        console.log(`===========================================\n`);
+      };
+      
+      // İlk ölçümü hemen başlat
+      setTimeout(measureBallState, 10);
       
       // Güç sıfırla
       pp.powerLevel = 0;
       room.setPlayerAvatar(p.id, "");
     }
-    // Eğer powerLevel 0 ise hiçbir güç uygulanmaz, normal vuruş olur
     
     // Diğer sistemler
-    teamplayBoost(game, p);
-    applyRotation(game, p);
     handleLastTouch(game, pp);
     
     if (pp.activation > 20) {
@@ -970,7 +1229,14 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
         xgravity: 0,
         ygravity: 0,
       }); // without this, there was one tick where the ball's gravity was applied, and the ball has moved after positions reset.
-      game.ballRotation = { x: 0, y: 0, power: 0 };
+      // Rotasyon verilerini tamamen sıfırla
+      game.ballRotation = { 
+        x: 0, 
+        y: 0, 
+        power: 0,
+        targetPower: 0,
+        accelerationRate: 0
+      };
     }
   };
 
