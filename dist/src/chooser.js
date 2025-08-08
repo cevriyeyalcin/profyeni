@@ -161,62 +161,7 @@ const initChooser = (room) => {
         }
         (0, message_1.sendMessage)("Break time: 10 seconds.");
         yield (0, utils_1.sleep)(10000);
-        // Auto-assign balanced teams based on ELO when enough players are ready
-        if (ready().length >= maxTeamSize * 2) {
-            const rd = ready();
-            // Build balanced teams
-            const sorted = rd
-                .slice(0)
-                .sort((a, b) => (0, __3.toAug)(b).elo - (0, __3.toAug)(a).elo)
-                .slice(0, maxTeamSize * 2);
-            const redTeam = [];
-            const blueTeam = [];
-            let redElo = 0;
-            let blueElo = 0;
-            for (const p of sorted) {
-                const pElo = (0, __3.toAug)(p).elo;
-                if ((redTeam.length < maxTeamSize && redElo <= blueElo) ||
-                    blueTeam.length >= maxTeamSize) {
-                    redTeam.push(p);
-                    redElo += pElo;
-                }
-                else {
-                    blueTeam.push(p);
-                    blueElo += pElo;
-                }
-            }
-            // Clear any existing team assignments and apply new teams
-            room.getPlayerList().forEach((p) => {
-                if (p.team != 0) {
-                    room.setPlayerTeam(p.id, 0);
-                }
-            });
-            redTeam.forEach((p) => room.setPlayerTeam(p.id, 1));
-            blueTeam.forEach((p) => room.setPlayerTeam(p.id, 2));
-            if (redTeam.length == maxTeamSize && blueTeam.length == maxTeamSize) {
-                isRanked = true;
-                (0, message_1.sendMessage)("Ranked game.");
-            }
-            else {
-                (0, message_1.sendMessage)("Unranked game.");
-                isRanked = false;
-                refill();
-            }
-        }
-        else {
-            isRanked = false;
-            let i = 0;
-            ready().forEach((p) => {
-                if (i % 2) {
-                    room.setPlayerTeam(p.id, 2);
-                }
-                else {
-                    room.setPlayerTeam(p.id, 1);
-                }
-                i++;
-            });
-        }
-        room.startGame();
+        // Team rotation and game restart are handled by index.ts (applyTeamRotation & onGameStop). Do nothing here to avoid conflicts.
     });
 };
 exports.default = initChooser;
