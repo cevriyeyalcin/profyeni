@@ -51,13 +51,10 @@ const fs = __importStar(require("fs"));
 const index_1 = require("../index");
 const chooser_1 = require("./chooser");
 const index_2 = require("../index");
-const draft_1 = require("./draft/draft");
-const settings_1 = require("./settings");
-const chooser_2 = require("./chooser");
 const config_1 = __importDefault(require("../config"));
 const afk_1 = require("./afk");
 const db_1 = require("./db");
-const settings_2 = require("./settings");
+const settings_1 = require("./settings");
 const vips_1 = require("./vips");
 const vote_1 = require("./vote");
 const isCommand = (msg) => {
@@ -100,7 +97,6 @@ const commands = {
     bb: (p) => bb(p),
     help: (p) => showHelp(p),
     admin: (p, args) => adminLogin(p, args),
-    draft: (p) => draft(p),
     rs: (p) => rs(p),
     script: (p) => script(p),
     version: (p) => showVersion(p),
@@ -268,24 +264,6 @@ const teamChat = (p, args) => {
         }
     });
 };
-const draft = (p) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
-    if (!index_1.room.getPlayer(p.id).admin) {
-        (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
-        return;
-    }
-    (0, message_1.sendMessage)(`${p.name} haritayı taslak moduna aldı`);
-    (0, chooser_2.changeDuringDraft)(true);
-    const result = yield (0, draft_1.performDraft)(index_1.room, index_1.room.getPlayerList(), settings_1.teamSize);
-    index_1.room.getPlayerList().forEach((p) => {
-        if (p.team != 0) {
-            index_1.room.setPlayerTeam(p.id, 0);
-        }
-    });
-    (_a = result === null || result === void 0 ? void 0 : result.red) === null || _a === void 0 ? void 0 : _a.forEach((p) => index_1.room.setPlayerTeam(p.id, 1));
-    (_b = result === null || result === void 0 ? void 0 : result.blue) === null || _b === void 0 ? void 0 : _b.forEach((p) => index_1.room.setPlayerTeam(p.id, 2));
-    (0, chooser_2.changeDuringDraft)(false);
-});
 const rs = (p) => {
     if (!index_1.room.getPlayer(p.id).admin) {
         (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
@@ -317,7 +295,7 @@ const setBack = (p) => {
 const showHelp = (p) => {
     const isAdmin = index_1.room.getPlayer(p.id).admin;
     if (isAdmin) {
-        (0, message_1.sendMessage)(`${config_1.default.roomName} - Yönetici Komutları: !admin, !draft, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`, p);
+        (0, message_1.sendMessage)(`${config_1.default.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`, p);
         (0, message_1.sendMessage)(`Ban Kullanımı: !ban <ID_veya_İsim> [sebep] (Çevrimiçi ve çevrimdışı oyuncular için)`, p);
         (0, message_1.sendMessage)(`VIP Komutları: !vipekle, !vipsil, !vipler, !vipkontrol`, p);
         (0, message_1.sendMessage)(`Bilgi Komutları: !auth <oyuncu>`, p);
@@ -735,29 +713,29 @@ const handleOffsideCommand = (p, args) => {
         return;
     }
     if (args.length < 1) {
-        const currentStatus = (0, settings_2.getOffsideEnabled)() ? "açık" : "kapalı";
+        const currentStatus = (0, settings_1.getOffsideEnabled)() ? "açık" : "kapalı";
         (0, message_1.sendMessage)(`Kullanım: !ofsayt aç veya !ofsayt kapat | Şu anki durum: ${currentStatus}`, p);
         return;
     }
     const action = args[0].toLowerCase();
     if (action === "aç" || action === "ac") {
-        if ((0, settings_2.getOffsideEnabled)()) {
+        if ((0, settings_1.getOffsideEnabled)()) {
             (0, message_1.sendMessage)("Ofsayt sistemi zaten açık.", p);
             return;
         }
-        (0, settings_2.setOffsideEnabled)(true);
+        (0, settings_1.setOffsideEnabled)(true);
         (0, message_1.sendMessage)(`${p.name} ofsayt sistemini açtı. ⚽ Ofsayt kuralları aktif!`);
     }
     else if (action === "kapat") {
-        if (!(0, settings_2.getOffsideEnabled)()) {
+        if (!(0, settings_1.getOffsideEnabled)()) {
             (0, message_1.sendMessage)("Ofsayt sistemi zaten kapalı.", p);
             return;
         }
-        (0, settings_2.setOffsideEnabled)(false);
+        (0, settings_1.setOffsideEnabled)(false);
         (0, message_1.sendMessage)(`${p.name} ofsayt sistemini kapattı. ❌ Ofsayt kuralları devre dışı!`);
     }
     else {
-        const currentStatus = (0, settings_2.getOffsideEnabled)() ? "açık" : "kapalı";
+        const currentStatus = (0, settings_1.getOffsideEnabled)() ? "açık" : "kapalı";
         (0, message_1.sendMessage)(`Geçersiz parametre. Kullanım: !ofsayt aç veya !ofsayt kapat | Şu anki durum: ${currentStatus}`, p);
     }
 };
@@ -835,9 +813,9 @@ const getBanReason = (auth) => __awaiter(void 0, void 0, void 0, function* () {
 exports.getBanReason = getBanReason;
 const handleSlowModeCommand = (p, args) => {
     if (args.length < 1) {
-        const status = (0, settings_2.getSlowModeEnabled)() ? "açık" : "kapalı";
-        const normalCooldown = Math.ceil(settings_2.slowModeSettings.normalUsers / 1000);
-        const vipCooldown = Math.ceil(settings_2.slowModeSettings.vipUsers / 1000);
+        const status = (0, settings_1.getSlowModeEnabled)() ? "açık" : "kapalı";
+        const normalCooldown = Math.ceil(settings_1.slowModeSettings.normalUsers / 1000);
+        const vipCooldown = Math.ceil(settings_1.slowModeSettings.vipUsers / 1000);
         (0, message_1.sendMessage)(`⏰ Yavaş mod durumu: ${status}`, p);
         (0, message_1.sendMessage)(`📊 Cooldown süreleri - Normal: ${normalCooldown}s, VIP: ${vipCooldown}s, Admin: 0s`, p);
         (0, message_1.sendMessage)("Kullanım: !yavaşmod <aç/kapat>", p);
@@ -845,21 +823,21 @@ const handleSlowModeCommand = (p, args) => {
     }
     const action = args[0].toLowerCase();
     if (action === "aç" || action === "ac" || action === "on" || action === "1") {
-        if ((0, settings_2.getSlowModeEnabled)()) {
+        if ((0, settings_1.getSlowModeEnabled)()) {
             (0, message_1.sendMessage)("⏰ Yavaş mod zaten açık!", p);
             return;
         }
-        (0, settings_2.setSlowModeEnabled)(true);
+        (0, settings_1.setSlowModeEnabled)(true);
         (0, message_1.sendMessage)("⏰ Yavaş mod açıldı!", undefined);
         (0, message_1.sendMessage)("📊 Normal kullanıcılar 3 saniyede bir, VIP kullanıcılar 1 saniyede bir mesaj atabilir.", undefined);
         (0, message_1.sendMessage)("👑 Adminler etkilenmez.", undefined);
     }
     else if (action === "kapat" || action === "off" || action === "0") {
-        if (!(0, settings_2.getSlowModeEnabled)()) {
+        if (!(0, settings_1.getSlowModeEnabled)()) {
             (0, message_1.sendMessage)("⏰ Yavaş mod zaten kapalı!", p);
             return;
         }
-        (0, settings_2.setSlowModeEnabled)(false);
+        (0, settings_1.setSlowModeEnabled)(false);
         (0, message_1.sendMessage)("⏰ Yavaş mod kapatıldı!", undefined);
         // Clear all existing cooldowns
         Promise.resolve().then(() => __importStar(require("../index"))).then(({ players }) => {

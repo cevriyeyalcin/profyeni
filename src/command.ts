@@ -3,9 +3,7 @@ import * as fs from "fs";
 import { room, PlayerAugmented, version, toAug } from "../index";
 import { addToGame, handlePlayerLeaveOrAFK } from "./chooser";
 import { adminPass } from "../index";
-import { performDraft } from "./draft/draft";
 import { teamSize } from "./settings";
-import { changeDuringDraft } from "./chooser";
 import config from "../config";
 import { setAfkSystemEnabled, isAfkSystemEnabled } from "./afk";
 import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, addMute, removeMute, getMute, getAllMutes, cleanExpiredMutes, searchPlayerByName, searchPlayersByName } from "./db";
@@ -59,7 +57,6 @@ const commands: { [key: string]: commandFunc } = {
   bb: (p) => bb(p),
   help: (p) => showHelp(p),
   admin: (p, args) => adminLogin(p, args),
-  draft: (p) => draft(p),
   rs: (p) => rs(p),
   script: (p) => script(p),
   version: (p) => showVersion(p),
@@ -252,27 +249,6 @@ const teamChat = (p: PlayerAugmented, args: string[]) => {
   });
 };
 
-const draft = async (p: PlayerAugmented) => {
-  if (!room.getPlayer(p.id).admin) {
-    sendMessage(
-      "❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.",
-      p,
-    );
-    return;
-  }
-  sendMessage(`${p.name} haritayı taslak moduna aldı`);
-  changeDuringDraft(true);
-  const result = await performDraft(room, room.getPlayerList(), teamSize);
-  room.getPlayerList().forEach((p) => {
-    if (p.team != 0) {
-      room.setPlayerTeam(p.id, 0);
-    }
-  });
-  result?.red?.forEach((p) => room.setPlayerTeam(p.id, 1));
-  result?.blue?.forEach((p) => room.setPlayerTeam(p.id, 2));
-  changeDuringDraft(false);
-};
-
 const rs = (p: PlayerAugmented) => {
   if (!room.getPlayer(p.id).admin) {
     sendMessage(
@@ -312,7 +288,7 @@ const showHelp = (p: PlayerAugmented) => {
   
   if (isAdmin) {
     sendMessage(
-      `${config.roomName} - Yönetici Komutları: !admin, !draft, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`,
+      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`,
       p,
     );
     sendMessage(

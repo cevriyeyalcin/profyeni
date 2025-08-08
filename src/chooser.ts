@@ -1,6 +1,4 @@
 import { room, players, PlayerAugmented, db } from "..";
-import * as fs from "fs";
-import { performDraft } from "./draft/draft";
 import { sendMessage } from "./message";
 import { game, Game } from "..";
 import { sleep } from "./utils";
@@ -166,38 +164,44 @@ const initChooser = (room: RoomObject) => {
     }
     sendMessage("Break time: 10 seconds.");
     await sleep(10000);
-    const winnerIds = room
-      .getPlayerList()
-      .filter((p) => p.team == winTeam)
-      .map((p) => p.id);
+
+    // Auto-assign balanced teams based on ELO when enough players are ready
     if (ready().length >= maxTeamSize * 2) {
       const rd = ready();
-      duringDraft = true;
-      room.getPlayerList().forEach((p) => room.setPlayerAvatar(p.id, ""));
-      const readyAndSorted = rd.sort((a, b) => toAug(b).elo - toAug(a).elo);
-      const draftResult = await performDraft(
-        room,
-        readyAndSorted,
-        maxTeamSize,
-        (p: PlayerObject) => (toAug(p).afk = true),
-      );
-      const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-        encoding: "utf8",
-        flag: "r",
-      });
-      room.setCustomStadium(rsStadium);
+
+      // Build balanced teams
+      const sorted = rd
+        .slice(0)
+        .sort((a, b) => toAug(b).elo - toAug(a).elo)
+        .slice(0, maxTeamSize * 2);
+      const redTeam: PlayerObject[] = [];
+      const blueTeam: PlayerObject[] = [];
+      let redElo = 0;
+      let blueElo = 0;
+      for (const p of sorted) {
+        const pElo = toAug(p).elo;
+        if (
+          (redTeam.length < maxTeamSize && redElo <= blueElo) ||
+          blueTeam.length >= maxTeamSize
+        ) {
+          redTeam.push(p);
+          redElo += pElo;
+        } else {
+          blueTeam.push(p);
+          blueElo += pElo;
+        }
+      }
+
+      // Clear any existing team assignments and apply new teams
       room.getPlayerList().forEach((p) => {
         if (p.team != 0) {
           room.setPlayerTeam(p.id, 0);
         }
       });
-      draftResult?.red?.forEach((p) => room.setPlayerTeam(p.id, 1));
-      draftResult?.blue?.forEach((p) => room.setPlayerTeam(p.id, 2));
-      duringDraft = false;
-      if (
-        draftResult?.red?.length == maxTeamSize &&
-        draftResult?.blue?.length == maxTeamSize
-      ) {
+      redTeam.forEach((p) => room.setPlayerTeam(p.id, 1));
+      blueTeam.forEach((p) => room.setPlayerTeam(p.id, 2));
+
+      if (redTeam.length == maxTeamSize && blueTeam.length == maxTeamSize) {
         isRanked = true;
         sendMessage("Ranked game.");
       } else {

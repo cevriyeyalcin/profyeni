@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -44,8 +11,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.addToGame = exports.handlePlayerLeaveOrAFK = exports.changeDuringDraft = exports.duringDraft = void 0;
 const __1 = require("..");
-const fs = __importStar(require("fs"));
-const draft_1 = require("./draft/draft");
 const message_1 = require("./message");
 const __2 = require("..");
 const utils_1 = require("./utils");
@@ -180,7 +145,6 @@ const initChooser = (room) => {
     };
     const _onTeamVictory = room.onTeamVictory;
     room.onTeamVictory = (scores) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
         if (exports.duringDraft) {
             return;
         }
@@ -197,31 +161,39 @@ const initChooser = (room) => {
         }
         (0, message_1.sendMessage)("Break time: 10 seconds.");
         yield (0, utils_1.sleep)(10000);
-        const winnerIds = room
-            .getPlayerList()
-            .filter((p) => p.team == winTeam)
-            .map((p) => p.id);
+        // Auto-assign balanced teams based on ELO when enough players are ready
         if (ready().length >= maxTeamSize * 2) {
             const rd = ready();
-            exports.duringDraft = true;
-            room.getPlayerList().forEach((p) => room.setPlayerAvatar(p.id, ""));
-            const readyAndSorted = rd.sort((a, b) => (0, __3.toAug)(b).elo - (0, __3.toAug)(a).elo);
-            const draftResult = yield (0, draft_1.performDraft)(room, readyAndSorted, maxTeamSize, (p) => ((0, __3.toAug)(p).afk = true));
-            const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-                encoding: "utf8",
-                flag: "r",
-            });
-            room.setCustomStadium(rsStadium);
+            // Build balanced teams
+            const sorted = rd
+                .slice(0)
+                .sort((a, b) => (0, __3.toAug)(b).elo - (0, __3.toAug)(a).elo)
+                .slice(0, maxTeamSize * 2);
+            const redTeam = [];
+            const blueTeam = [];
+            let redElo = 0;
+            let blueElo = 0;
+            for (const p of sorted) {
+                const pElo = (0, __3.toAug)(p).elo;
+                if ((redTeam.length < maxTeamSize && redElo <= blueElo) ||
+                    blueTeam.length >= maxTeamSize) {
+                    redTeam.push(p);
+                    redElo += pElo;
+                }
+                else {
+                    blueTeam.push(p);
+                    blueElo += pElo;
+                }
+            }
+            // Clear any existing team assignments and apply new teams
             room.getPlayerList().forEach((p) => {
                 if (p.team != 0) {
                     room.setPlayerTeam(p.id, 0);
                 }
             });
-            (_a = draftResult === null || draftResult === void 0 ? void 0 : draftResult.red) === null || _a === void 0 ? void 0 : _a.forEach((p) => room.setPlayerTeam(p.id, 1));
-            (_b = draftResult === null || draftResult === void 0 ? void 0 : draftResult.blue) === null || _b === void 0 ? void 0 : _b.forEach((p) => room.setPlayerTeam(p.id, 2));
-            exports.duringDraft = false;
-            if (((_c = draftResult === null || draftResult === void 0 ? void 0 : draftResult.red) === null || _c === void 0 ? void 0 : _c.length) == maxTeamSize &&
-                ((_d = draftResult === null || draftResult === void 0 ? void 0 : draftResult.blue) === null || _d === void 0 ? void 0 : _d.length) == maxTeamSize) {
+            redTeam.forEach((p) => room.setPlayerTeam(p.id, 1));
+            blueTeam.forEach((p) => room.setPlayerTeam(p.id, 2));
+            if (redTeam.length == maxTeamSize && blueTeam.length == maxTeamSize) {
                 isRanked = true;
                 (0, message_1.sendMessage)("Ranked game.");
             }
