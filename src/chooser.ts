@@ -6,7 +6,7 @@ import { sleep } from "./utils";
 import { toAug } from "..";
 import { teamSize } from "./settings";
 import { changeLevels } from "./levels";
-import { handlePlayerLeave as handleTeamChooserLeave, checkAndShowWaitingMessage } from "./teamChooser";
+import { handlePlayerLeave as handleTeamChooserLeave, checkAndShowWaitingMessage, checkAndAutoBalance } from "./teamChooser";
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
@@ -43,7 +43,18 @@ export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
   }
   await sleep(100);
   if (!duringDraft) {
-    balanceTeams();
+    // First try auto-balance (to spectators) for team chooser system
+    const autoBalanced = checkAndAutoBalance();
+    
+    // If no auto-balance occurred, use traditional balance (between teams)
+    if (!autoBalanced) {
+      balanceTeams();
+    }
+    
+    // Check if waiting message should be shown after balancing
+    setTimeout(() => {
+      checkAndShowWaitingMessage();
+    }, 500);
   }
 };
 

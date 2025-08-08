@@ -10,7 +10,7 @@ import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, a
 import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings } from "./settings";
 import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
 import { handleVoteBan } from "./vote";
-import { forceEndSelection, isSelectionActive } from "./teamChooser";
+import { forceEndSelection, isSelectionActive, checkAndAutoBalance } from "./teamChooser";
 
 export const isCommand = (msg: string) => {
   const trimmed = msg.trim();
@@ -193,6 +193,20 @@ const commands: { [key: string]: commandFunc } = {
       sendMessage("Şu anda aktif bir oyuncu seçimi yok.", p);
     }
   },
+  
+  // Auto-balance command
+  dengele: (p) => {
+    if (!room.getPlayer(p.id).admin) {
+      sendMessage("Bu komutu sadece adminler kullanabilir.", p);
+      return;
+    }
+    const balanced = checkAndAutoBalance();
+    if (balanced) {
+      sendMessage("⚖️ Takımlar otomatik olarak dengelendi!", p);
+    } else {
+      sendMessage("ℹ️ Takımlar zaten dengeli veya otomatik dengeleme gerekli değil.", p);
+    }
+  },
 };
 
 const adminLogin = (p: PlayerAugmented, args: string[]) => {
@@ -313,7 +327,7 @@ const showHelp = (p: PlayerAugmented) => {
   
   if (isAdmin) {
     sendMessage(
-      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !seçimiptal`,
+      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !seçimiptal, !dengele`,
       p,
     );
     sendMessage(

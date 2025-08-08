@@ -77,6 +77,55 @@ export const checkAndShowWaitingMessage = (): void => {
   }
 };
 
+// Check if teams are uneven and auto-balance by moving players to spectators
+export const checkAndAutoBalance = (): boolean => {
+  const redPlayers = getRedPlayers();
+  const bluePlayers = getBluePlayers();
+  const spectators = getSpectators();
+  
+  const redCount = redPlayers.length;
+  const blueCount = bluePlayers.length;
+  const specCount = spectators.length;
+  
+  console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Spectators: ${specCount}`);
+  
+  // Only auto-balance if teams are uneven by 2+ players and no spectators available
+  const teamDifference = Math.abs(redCount - blueCount);
+  if (teamDifference < 2 || specCount > 0) {
+    return false; // No need to auto-balance
+  }
+  
+  // Determine which team has more players
+  const advantagedTeam = redCount > blueCount ? "red" : "blue";
+  const advantagedPlayers = redCount > blueCount ? redPlayers : bluePlayers;
+  const disadvantagedCount = Math.min(redCount, blueCount);
+  
+  // Calculate how many players to move (make teams even or 1 player difference max)
+  const playersToMove = Math.floor(teamDifference / 2);
+  
+  if (playersToMove > 0) {
+    console.log(`[AUTO_BALANCE] Moving ${playersToMove} player(s) from ${advantagedTeam} team to spectators`);
+    
+    // Move the last joined players (highest IDs) to spectators
+    const sortedAdvantaged = advantagedPlayers.sort((a, b) => b.id - a.id);
+    const playersToMoveToSpec = sortedAdvantaged.slice(0, playersToMove);
+    
+    playersToMoveToSpec.forEach(player => {
+      room.setPlayerTeam(player.id, 0); // Move to spectators
+      console.log(`[AUTO_BALANCE] Moved ${player.name} (ID: ${player.id}) to spectators`);
+    });
+    
+    const teamName = advantagedTeam === "red" ? "Kırmızı" : "Mavi";
+    const movedNames = playersToMoveToSpec.map(p => p.name).join(", ");
+    
+    sendMessage(`⚖️ Takımlar dengelendi! ${teamName} takımından ${movedNames} izleyiciye geçti.`, null);
+    
+    return true; // Auto-balancing occurred
+  }
+  
+  return false;
+};
+
 // Start the selection process
 export const startSelection = (): void => {
   if (chooserState.isActive) return;

@@ -11,7 +11,7 @@ import { sleep } from "./utils";
 import { announceCards, handleAdvantageOnBallOut } from "./foul";
 import { penaltyPoint } from "./settings";
 import { resetTeamplayBoost, setBallInvMassAndColor } from "./teamplayBoost";
-import { shouldTriggerSelection, startSelection } from "./teamChooser";
+import { shouldTriggerSelection, startSelection, checkAndAutoBalance } from "./teamChooser";
 
 const blink = async (
   game: Game,
@@ -66,10 +66,19 @@ export const handleBallOutOfBounds = (game: Game) => {
       return; // Exit early - don't do normal throw-in/corner/goal kick
     }
     
-    // Check if team selection should be triggered
-    if (shouldTriggerSelection()) {
-      startSelection();
-      return; // Selection will handle game resumption
+    // Check if teams need auto-balancing first
+    if (checkAndAutoBalance()) {
+      // Auto-balancing occurred, trigger selection if spectators are now available
+      if (shouldTriggerSelection()) {
+        startSelection();
+        return; // Selection will handle game resumption
+      }
+    } else {
+      // Check if team selection should be triggered
+      if (shouldTriggerSelection()) {
+        startSelection();
+        return; // Selection will handle game resumption
+      }
     }
     
     // Normal out-of-bounds handling when no advantage active
@@ -281,10 +290,19 @@ export const freeKick = async (
   forTeam: TeamID,
   pos: { x: number; y: number },
 ) => {
-  // Check if team selection should be triggered before free kick
-  if (shouldTriggerSelection()) {
-    startSelection();
-    return; // Selection will handle game resumption
+  // Check if teams need auto-balancing first
+  if (checkAndAutoBalance()) {
+    // Auto-balancing occurred, trigger selection if spectators are now available
+    if (shouldTriggerSelection()) {
+      startSelection();
+      return; // Selection will handle game resumption
+    }
+  } else {
+    // Check if team selection should be triggered before free kick
+    if (shouldTriggerSelection()) {
+      startSelection();
+      return; // Selection will handle game resumption
+    }
   }
   
   announceCards(game);
@@ -540,10 +558,19 @@ export const penalty = async (
   forTeam: TeamID,
   fouledAt: { x: number; y: number },
 ) => {
-  // Check if team selection should be triggered before penalty
-  if (shouldTriggerSelection()) {
-    startSelection();
-    return; // Selection will handle game resumption
+  // Check if teams need auto-balancing first
+  if (checkAndAutoBalance()) {
+    // Auto-balancing occurred, trigger selection if spectators are now available
+    if (shouldTriggerSelection()) {
+      startSelection();
+      return; // Selection will handle game resumption
+    }
+  } else {
+    // Check if team selection should be triggered before penalty
+    if (shouldTriggerSelection()) {
+      startSelection();
+      return; // Selection will handle game resumption
+    }
   }
   
   const pos = { x: Math.sign(fouledAt.x) * penaltyPoint.x, y: penaltyPoint.y };
