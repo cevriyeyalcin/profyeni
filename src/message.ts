@@ -19,7 +19,11 @@ const extractRealUsername = (formattedName: string): string => {
   return match ? match[1] : formattedName;
 };
 
-const percentage = (elo: number) => 1 / (1 + Math.E ** -((elo - 1200) / 100));
+const levelPercentage = (level: number) => {
+  // Convert level to a percentage for color blending (levels 1-50+ range)
+  // Level 1 = 0%, Level 25 = 50%, Level 50+ = 100%
+  return Math.min(1, (level - 1) / 49);
+};
 
 export const sendMessage = (
   msg: string,
@@ -127,7 +131,7 @@ export const playerMessage = async (p: PlayerAugmented, msg: string): Promise<bo
       const adminPlayers = room.getPlayerList().filter(player => player.admin);
       adminPlayers.forEach(admin => {
         room.sendAnnouncement(
-          `[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg} ${adminSuffix}`,
+          `[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg} ${adminSuffix}`,
           admin.id,
           0xFF6B6B, // Red color for violation warning
           "normal",
@@ -148,7 +152,7 @@ export const playerMessage = async (p: PlayerAugmented, msg: string): Promise<bo
   } else if (isVip && vipColor) {
     chatColor = parseInt(vipColor, 16); // Use VIP custom color - eski çalışan sürüm
   } else {
-    chatColor = blendColorsInt(0x636363, 0xfff7f2, percentage(p.elo) * 100); // Default ELO-based color
+    chatColor = blendColorsInt(0x636363, 0xfff7f2, levelPercentage(p.level) * 100); // Default level-based color
   }
   
   // Determine text style - VIP users can have custom styles, others default to "normal"
@@ -162,7 +166,7 @@ export const playerMessage = async (p: PlayerAugmented, msg: string): Promise<bo
     const adminPlayers = room.getPlayerList().filter(player => player.admin);
     adminPlayers.forEach(admin => {
       room.sendAnnouncement(
-        `[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`,
+        `[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`,
         admin.id,
         chatColor,
         textStyle,
@@ -172,7 +176,7 @@ export const playerMessage = async (p: PlayerAugmented, msg: string): Promise<bo
   } else {
     // Normal message to everyone
     room.sendAnnouncement(
-      `[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`,
+      `[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`,
       undefined,
       chatColor,
       textStyle,
