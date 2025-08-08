@@ -81,18 +81,10 @@ export const startSelection = (): void => {
     chooserState.waitingForBlue = true;
     lastFirstTeam = 2; // Blue went first
   } else {
-    // Equal teams, alternate who goes first
-    if (lastFirstTeam === 1) {
-      // Red went first last time, now blue goes first
-      chooserState.waitingForRed = false;
-      chooserState.waitingForBlue = true;
-      lastFirstTeam = 2;
-    } else {
-      // Blue went first last time, now red goes first
-      chooserState.waitingForRed = true;
-      chooserState.waitingForBlue = false;
-      lastFirstTeam = 1;
-    }
+    // Equal teams, both teams can choose simultaneously
+    chooserState.waitingForRed = true;
+    chooserState.waitingForBlue = true;
+    // Note: We'll handle the selection order by whoever selects first
   }
   
   sendSpectatorList();
@@ -108,25 +100,32 @@ const sendSpectatorList = (): void => {
     message += `${index + 1}. ${spec.name} [Lvl.${spec.level}]\n`;
   });
   
-  const currentTeam = chooserState.waitingForRed ? "Kırmızı" : "Mavi";
-  message += `\n${currentTeam} takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
-  
-  // Send to all team members of the current team with team colors
   const { red, blue } = getTeamMembers();
-  const currentTeamMembers = chooserState.waitingForRed ? red : blue;
-  const teamColor = chooserState.waitingForRed ? 0xFF0000 : 0x0000FF; // Red or Blue
-  
-  currentTeamMembers.forEach(member => {
-    // Send with team color and bold text for visibility
-    room.sendAnnouncement(message, member.id, teamColor, "bold", 2);
-  });
-  
-  // Send info to other players (opposite team and spectators)
-  const infoMessage = `⏸️ Oyun durduruldu. ${currentTeam} takımı oyuncu seçiyor...`;
-  const otherTeamMembers = chooserState.waitingForRed ? blue : red;
   const spectators = getSpectators().map(p => toAug(p));
   
-  [...otherTeamMembers, ...spectators].forEach(player => {
+  // Send to red team if they can choose
+  if (chooserState.waitingForRed) {
+    const redMessage = message + `\nKırmızı takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
+    red.forEach(member => {
+      room.sendAnnouncement(redMessage, member.id, 0xFF0000, "bold", 2); // Red color
+    });
+  }
+  
+  // Send to blue team if they can choose
+  if (chooserState.waitingForBlue) {
+    const blueMessage = message + `\nMavi takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
+    blue.forEach(member => {
+      room.sendAnnouncement(blueMessage, member.id, 0x0000FF, "bold", 2); // Blue color
+    });
+  }
+  
+  // Send info to spectators
+  const activeTeams = [];
+  if (chooserState.waitingForRed) activeTeams.push("Kırmızı");
+  if (chooserState.waitingForBlue) activeTeams.push("Mavi");
+  const infoMessage = `⏸️ Oyun durduruldu. ${activeTeams.join(" ve ")} takım${activeTeams.length > 1 ? 'ları' : 'ı'} oyuncu seçiyor...`;
+  
+  spectators.forEach(player => {
     sendMessage(infoMessage, player);
   });
 };
@@ -201,9 +200,23 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   // Check if we should continue or end selection
   const shouldContinue = checkContinueSelection();
   if (shouldContinue) {
-    // Switch to other team
-    chooserState.waitingForRed = !chooserState.waitingForRed;
-    chooserState.waitingForBlue = !chooserState.waitingForBlue;
+    // Determine who should choose next based on team balance
+    const newRedCount = getRedPlayers().length;
+    const newBlueCount = getBluePlayers().length;
+    
+    if (newRedCount < newBlueCount) {
+      // Red team needs more players
+      chooserState.waitingForRed = true;
+      chooserState.waitingForBlue = false;
+    } else if (newBlueCount < newRedCount) {
+      // Blue team needs more players
+      chooserState.waitingForRed = false;
+      chooserState.waitingForBlue = true;
+    } else {
+      // Teams are equal, both can choose
+      chooserState.waitingForRed = true;
+      chooserState.waitingForBlue = true;
+    }
     
     sendSpectatorList();
     startSelectionTimeout();

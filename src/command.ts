@@ -10,7 +10,7 @@ import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, a
 import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings } from "./settings";
 import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
 import { handleVoteBan } from "./vote";
-import { handleSelection, isSelectionActive, forceEndSelection } from "./teamChooser";
+import { forceEndSelection, isSelectionActive } from "./teamChooser";
 
 export const isCommand = (msg: string) => {
   const trimmed = msg.trim();
@@ -20,24 +20,7 @@ export const isCommand = (msg: string) => {
 export const handleCommand = async (p: PlayerAugmented, msg: string): Promise<void> => {
   const trimmed = msg.trim();
   
-  // Handle team selection numbers (when selection is active)
-  if (isSelectionActive()) {
-    console.log(`[COMMAND] Selection is active, checking message: "${trimmed}" from ${p.name}`);
-    const numberMatch = trimmed.match(/^\d+$/);
-    if (numberMatch) {
-      console.log(`[COMMAND] Number detected: ${trimmed}, calling handleSelection`);
-      const handled = handleSelection(p, trimmed);
-      console.log(`[COMMAND] handleSelection returned: ${handled}`);
-      if (handled) return; // Selection consumed the message
-    } else {
-      console.log(`[COMMAND] Message "${trimmed}" is not a pure number`);
-    }
-  } else {
-    // Only log if it's a number to avoid spam
-    if (trimmed.match(/^\d+$/)) {
-      console.log(`[COMMAND] Number "${trimmed}" received but selection not active`);
-    }
-  }
+  // Team selection is now handled in the main chat handler (index.ts)
   
   // Handle special case for "t {mesaj}" without !
   if (trimmed.toLowerCase().startsWith("t ") && !trimmed.startsWith("!")) {

@@ -1,5 +1,6 @@
 import { Headless } from "haxball.js";
 import { addToGame, duringDraft, handlePlayerLeaveOrAFK } from "./src/chooser";
+import { handleSelection, isSelectionActive } from "./src/teamChooser";
 import { isCommand, handleCommand } from "./src/command";
 import { playerMessage, sendMessage, Discordinterval } from "./src/message";
 import {
@@ -901,6 +902,18 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
     if (msg == "!debug") {
       console.log(game);
       return false;
+    }
+
+    // Handle team selection numbers (priority over commands)
+    if (isSelectionActive()) {
+      console.log(`[CHAT] Selection is active, checking message: "${msg}" from ${pp.name}`);
+      const numberMatch = msg.trim().match(/^\d+$/);
+      if (numberMatch) {
+        console.log(`[CHAT] Number detected: ${msg}, calling handleSelection`);
+        const handled = handleSelection(pp, msg.trim());
+        console.log(`[CHAT] handleSelection returned: ${handled}`);
+        if (handled) return false; // Selection consumed the message
+      }
     }
 
     if (isCommand(msg)) {
