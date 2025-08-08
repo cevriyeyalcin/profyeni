@@ -89,10 +89,20 @@ export const checkAndAutoBalance = (): boolean => {
   
   console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Spectators: ${specCount}`);
   
-  // Only auto-balance if teams are uneven by 2+ players and no spectators available
+  // Only auto-balance if teams are uneven and no spectators available  
   const teamDifference = Math.abs(redCount - blueCount);
-  if (teamDifference < 2 || specCount > 0) {
+  
+  // Don't balance if teams are equal or if spectators are available
+  if (teamDifference === 0 || specCount > 0) {
+    console.log(`[AUTO_BALANCE] No balance needed - Difference: ${teamDifference}, Spectators: ${specCount}`);
     return false; // No need to auto-balance
+  }
+  
+  // Don't balance if there are too few players total (less than 3)
+  const totalPlayers = redCount + blueCount;
+  if (totalPlayers < 3) {
+    console.log(`[AUTO_BALANCE] Not enough players to balance - Total: ${totalPlayers}`);
+    return false;
   }
   
   // Determine which team has more players
@@ -100,8 +110,9 @@ export const checkAndAutoBalance = (): boolean => {
   const advantagedPlayers = redCount > blueCount ? redPlayers : bluePlayers;
   const disadvantagedCount = Math.min(redCount, blueCount);
   
-  // Calculate how many players to move (make teams even or 1 player difference max)
-  const playersToMove = Math.floor(teamDifference / 2);
+  // For any uneven team situation, move 1 player from advantaged team to spectators
+  // This creates spectators for the team chooser system and improves balance
+  const playersToMove = 1;
   
   if (playersToMove > 0) {
     console.log(`[AUTO_BALANCE] Moving ${playersToMove} player(s) from ${advantagedTeam} team to spectators`);
