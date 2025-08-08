@@ -57,3 +57,14 @@ export const setSlowModeEnabled = (enabled: boolean) => {
 export const getSlowModeEnabled = () => {
   return isSlowModeEnabled;
 };
+
+// Duplicate connection blocking system
+export let isDuplicateBlockingEnabled = true;
+
+export const setDuplicateBlockingEnabled = (enabled: boolean) => {
+  isDuplicateBlockingEnabled = enabled;
+};
+
+export const getDuplicateBlockingEnabled = () => {
+  return isDuplicateBlockingEnabled;
+};

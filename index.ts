@@ -18,7 +18,7 @@ import { welcomePlayer } from "./src/welcome";
 import { initDb } from "./src/db";
 import { setBallInvMassAndColor, teamplayBoost } from "./src/teamplayBoost";
 import { applyRotation } from "./src/rotateBall";
-import { defaults } from "./src/settings";
+import { defaults, getDuplicateBlockingEnabled } from "./src/settings";
 import { afk } from "./src/afk";
 import { initPlayer } from "./src/welcome";
 import * as crypto from "node:crypto";
@@ -1113,7 +1113,8 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
     if (process.env.DEBUG) {
       room.setPlayerAdmin(p.id, true);
     } else {
-      if (players.map((p) => p.auth).includes(p.auth)) {
+      // Check for duplicate connections if the system is enabled
+      if (getDuplicateBlockingEnabled() && players.map((p) => p.auth).includes(p.auth)) {
         room.kickPlayer(p.id, "Zaten sunucudasınız.", false);
         return
       }

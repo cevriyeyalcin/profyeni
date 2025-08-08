@@ -7,7 +7,7 @@ import { teamSize } from "./settings";
 import config from "../config";
 import { setAfkSystemEnabled, isAfkSystemEnabled } from "./afk";
 import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, addMute, removeMute, getMute, getAllMutes, cleanExpiredMutes, searchPlayerByName, searchPlayersByName } from "./db";
-import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings } from "./settings";
+import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings, setDuplicateBlockingEnabled, getDuplicateBlockingEnabled } from "./settings";
 import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
 import { handleVoteBan } from "./vote";
 import { forceEndSelection, isSelectionActive, checkAndAutoBalance, shouldTriggerSelection, startSelection } from "./teamChooser";
@@ -158,6 +158,15 @@ const commands: { [key: string]: commandFunc } = {
       return;
     }
     handleSlowModeCommand(p, args);
+  },
+  
+  // Duplicate connection blocking system
+  yansekme: (p, args) => {
+    if (!room.getPlayer(p.id).admin) {
+      sendMessage("Bu komutu sadece adminler kullanabilir.", p);
+      return;
+    }
+    handleDuplicateBlocking(p, args);
   },
   
   // Streak records command
@@ -350,7 +359,7 @@ const showHelp = (p: PlayerAugmented) => {
   
   if (isAdmin) {
     sendMessage(
-      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !seçimiptal, !dengele`,
+      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !yansekme (aç/kapat), !seçimiptal, !dengele`,
       p,
     );
     sendMessage(
@@ -501,6 +510,40 @@ const handleAfkSystem = (p: PlayerAugmented, args: string[]) => {
     sendMessage(`${p.name} AFK sistemini açtı. Artık AFK kontrolü yapılacak.`);
   } else {
     sendMessage("Kullanım: !afksistem aç veya !afksistem kapat", p);
+  }
+};
+
+const handleDuplicateBlocking = (p: PlayerAugmented, args: string[]) => {
+  if (!room.getPlayer(p.id).admin) {
+    sendMessage(
+      "❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.",
+      p,
+    );
+    return;
+  }
+  
+  if (args.length < 1) {
+    sendMessage("Kullanım: !yansekme aç veya !yansekme kapat", p);
+    return;
+  }
+  
+  const action = args[0].toLowerCase();
+  if (action === "kapat") {
+    if (!getDuplicateBlockingEnabled()) {
+      sendMessage("Yansekme engelleme sistemi zaten kapalı.", p);
+      return;
+    }
+    setDuplicateBlockingEnabled(false);
+    sendMessage(`${p.name} yansekme engelleme sistemini kapattı. Artık aynı hesapla birden fazla giriş yapılabilir.`);
+  } else if (action === "aç") {
+    if (getDuplicateBlockingEnabled()) {
+      sendMessage("Yansekme engelleme sistemi zaten açık.", p);
+      return;
+    }
+    setDuplicateBlockingEnabled(true);
+    sendMessage(`${p.name} yansekme engelleme sistemini açtı. Artık aynı hesapla birden fazla giriş engellenecek.`);
+  } else {
+    sendMessage("Kullanım: !yansekme aç veya !yansekme kapat", p);
   }
 };
 
