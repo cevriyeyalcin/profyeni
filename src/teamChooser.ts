@@ -178,11 +178,12 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
     return true;
   }
   
-  // Assign to team
-  const targetTeam = chooserState.waitingForRed ? 1 : 2;
+  // Determine which team the selecting player belongs to
+  const selectingPlayerTeam = red.find(p => p.id === player.id) ? 1 : 2;
+  const targetTeam = selectingPlayerTeam;
   const teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
   
-  console.log(`[TEAM_CHOOSER] Assigning ${selectedPlayer.name} to team ${targetTeam} (${teamName})`);
+  console.log(`[TEAM_CHOOSER] Player ${player.name} is in team ${selectingPlayerTeam}, assigning ${selectedPlayer.name} to team ${targetTeam} (${teamName})`);
   room.setPlayerTeam(selectedPlayer.id, targetTeam);
   
   // Announce selection
