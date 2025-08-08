@@ -102,11 +102,22 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
   if (duringDraft) {
     return;
   }
-  if (red().length > blue().length) {
-    room.setPlayerTeam(p.id, 2);
-  } else {
+  
+  // Only assign first 2 players to teams (1 red, 1 blue)
+  // All other players stay as spectators for team chooser system
+  const redCount = red().length;
+  const blueCount = blue().length;
+  const totalTeamPlayers = redCount + blueCount;
+  
+  if (totalTeamPlayers === 0) {
+    // First player goes to red team
     room.setPlayerTeam(p.id, 1);
+  } else if (totalTeamPlayers === 1 && redCount === 1 && blueCount === 0) {
+    // Second player goes to blue team
+    room.setPlayerTeam(p.id, 2);
   }
+  // All subsequent players (3rd, 4th, 5th...) stay as spectators (team 0)
+  // They will be chosen by teams using the team chooser system
 };
 
 const initChooser = (room: RoomObject) => {

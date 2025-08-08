@@ -26,6 +26,11 @@ A balanced team selection mechanism that allows **all team members** (not just c
 
 ## 🎮 How It Works
 
+### **Player Assignment Logic:**
+- **1st player** → Red team (team 1)
+- **2nd player** → Blue team (team 2)  
+- **3rd+ players** → Spectators (team 0) - chosen via team selection
+
 ### **Triggering Conditions:**
 ```
 ✓ 2+ spectators available
