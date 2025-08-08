@@ -87,6 +87,8 @@ export class PlayerAugmented {
   afk: boolean;
   afkCounter: number;
   elo: number;
+  experience: number;
+  level: number;
   powerLevel: number;
   cooldownMessageShown: boolean;
 
@@ -124,6 +126,8 @@ export class PlayerAugmented {
     this.afk = false;
     this.afkCounter = 0;
     this.elo = 1200;
+    this.experience = p.experience || 0;
+    this.level = p.level || 1;
     this.powerLevel = 0;
     this.cooldownMessageShown = false;
 

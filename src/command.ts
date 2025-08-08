@@ -1,11 +1,9 @@
 import { sendMessage } from "./message";
 import * as fs from "fs";
-import { room, PlayerAugmented, version, toAug } from "../index";
+import { room, PlayerAugmented, version, toAug, db } from "../index";
 import { addToGame, handlePlayerLeaveOrAFK } from "./chooser";
 import { adminPass } from "../index";
-import { performDraft } from "./draft/draft";
 import { teamSize } from "./settings";
-import { changeDuringDraft } from "./chooser";
 import config from "../config";
 import { setAfkSystemEnabled, isAfkSystemEnabled } from "./afk";
 import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, addMute, removeMute, getMute, getAllMutes, cleanExpiredMutes, searchPlayerByName, searchPlayersByName } from "./db";
@@ -59,7 +57,7 @@ const commands: { [key: string]: commandFunc } = {
   bb: (p) => bb(p),
   help: (p) => showHelp(p),
   admin: (p, args) => adminLogin(p, args),
-  draft: (p) => draft(p),
+
   rs: (p) => rs(p),
   script: (p) => script(p),
   version: (p) => showVersion(p),
@@ -173,6 +171,11 @@ const commands: { [key: string]: commandFunc } = {
   // Vote ban commands
   oyla: (p, args) => handleVoteBan(p, args),
   vote: (p, args) => handleVoteBan(p, args),
+  
+  // Level/Stats commands
+  seviye: (p, args) => showLevel(p, args),
+  level: (p, args) => showLevel(p, args),
+  lvl: (p, args) => showLevel(p, args),
 };
 
 const adminLogin = (p: PlayerAugmented, args: string[]) => {
@@ -252,26 +255,7 @@ const teamChat = (p: PlayerAugmented, args: string[]) => {
   });
 };
 
-const draft = async (p: PlayerAugmented) => {
-  if (!room.getPlayer(p.id).admin) {
-    sendMessage(
-      "❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.",
-      p,
-    );
-    return;
-  }
-  sendMessage(`${p.name} haritayı taslak moduna aldı`);
-  changeDuringDraft(true);
-  const result = await performDraft(room, room.getPlayerList(), teamSize);
-  room.getPlayerList().forEach((p) => {
-    if (p.team != 0) {
-      room.setPlayerTeam(p.id, 0);
-    }
-  });
-  result?.red?.forEach((p) => room.setPlayerTeam(p.id, 1));
-  result?.blue?.forEach((p) => room.setPlayerTeam(p.id, 2));
-  changeDuringDraft(false);
-};
+
 
 const rs = (p: PlayerAugmented) => {
   if (!room.getPlayer(p.id).admin) {
@@ -312,7 +296,7 @@ const showHelp = (p: PlayerAugmented) => {
   
   if (isAdmin) {
     sendMessage(
-      `${config.roomName} - Yönetici Komutları: !admin, !draft, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`,
+      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`,
       p,
     );
     sendMessage(
@@ -328,12 +312,16 @@ const showHelp = (p: PlayerAugmented) => {
       p,
     );
     sendMessage(
-      `Genel Komutlar: !afk, !back, !discord, !bb, !help, !version, !script`,
+      `Genel Komutlar: !afk, !back, !discord, !bb, !help, !version, !script, !seviye (!level, !lvl)`,
       p,
     );
   } else {
     sendMessage(
       `${config.roomName} - Komutlar: !afk, !back, !discord (!dc), !bb, !help, !version, !script, !rekorseri, !ff, !oyla (!vote)`,
+      p,
+    );
+    sendMessage(
+      `📊 Seviye Komutları: !seviye (!level, !lvl) - Seviye ve deneyim bilgilerinizi görün`,
       p,
     );
     sendMessage(
@@ -1090,5 +1078,56 @@ const showStreakRecords = (p: PlayerAugmented) => {
   } catch (error) {
     console.error("Streak records gösterme hatası:", error);
     sendMessage("❌ Rekor verileri gösterilirken hata oluştu.", p);
+  }
+};
+
+const showLevel = async (p: PlayerAugmented, args: string[]) => {
+  try {
+    let targetPlayer = p;
+    let targetAuth = p.auth;
+    
+    // If arguments provided, admin can check other players
+    if (args.length > 0 && room.getPlayer(p.id).admin) {
+      const targetName = args.join(" ");
+      const foundPlayer = room.getPlayerList().find(pl => 
+        pl.name.toLowerCase().includes(targetName.toLowerCase())
+      );
+      
+      if (foundPlayer) {
+        targetPlayer = toAug(foundPlayer);
+        targetAuth = foundPlayer.auth;
+      } else {
+        sendMessage(`❌ "${targetName}" isimli oyuncu bulunamadı.`, p);
+        return;
+      }
+    }
+    
+    // Get player data from database
+    const playerData = await db.get("SELECT experience, level FROM players WHERE auth=?", [targetAuth]);
+    
+    if (!playerData) {
+      sendMessage("❌ Oyuncu verileri bulunamadı.", p);
+      return;
+    }
+    
+    const { experience, level } = playerData;
+    
+    // Calculate XP needed for next level
+    const { calculateXpForNextLevel } = await import("./levels");
+    const xpForNextLevel = calculateXpForNextLevel(level);
+    const currentLevelXp = level > 1 ? calculateXpForNextLevel(level - 1) : 0;
+    const progressInCurrentLevel = experience - (level > 1 ? calculateXpForNextLevel(level - 1) : 0);
+    
+    const progressMessage = `📊 ${targetPlayer.name} - Seviye Bilgileri:
+🏆 Seviye: Lvl.${level}
+⭐ Deneyim: ${experience} XP
+📈 Bu seviye: ${progressInCurrentLevel}/${xpForNextLevel} XP
+🎯 Sonraki seviye: ${xpForNextLevel - progressInCurrentLevel} XP kaldı`;
+    
+    sendMessage(progressMessage, p);
+    
+  } catch (error) {
+    console.error("Level gösterme hatası:", error);
+    sendMessage("❌ Seviye bilgileri gösterilirken hata oluştu.", p);
   }
 };

@@ -9,6 +9,7 @@ export const welcomePlayer = (room: RoomObject, p: PlayerObject) => {
     `"X" tuşuna kısa bas kaydır, uzun bas koş. Takım içi paslar topa daha güçlü vurmanı sağlar.`,
     p,
   );
+  sendMessage(`🏆 Yeni seviye sistemi! Oyun oynayarak XP kazan ve seviye atla. !seviye ile ilerlemeni gör.`, p);
   sendMessage(`Discord: discord.gg/profstriker`, p);
 };
 
@@ -37,5 +38,7 @@ export const initPlayer = async (p: PlayerObject) => {
   players.push(newPlayer);
   const readPlayer = await getOrCreatePlayer(p);
   newPlayer.elo = readPlayer.elo;
+  newPlayer.experience = readPlayer.experience;
+  newPlayer.level = readPlayer.level;
   await db.run("UPDATE players SET name=? WHERE auth=?", [p.name, p.auth]);
 };

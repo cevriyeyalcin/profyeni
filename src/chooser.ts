@@ -1,27 +1,27 @@
 import { room, players, PlayerAugmented, db } from "..";
 import * as fs from "fs";
-import { performDraft } from "./draft/draft";
 import { sendMessage } from "./message";
 import { game, Game } from "..";
 import { sleep } from "./utils";
 import { toAug } from "..";
 import { teamSize } from "./settings";
-import { changeElo } from "./elo";
+import { changeLevels } from "./levels";
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
 
 const maxTeamSize = process.env.DEBUG ? 1 : teamSize;
 let isRunning: boolean = false;
+// All games are now unranked with level progression
 let isRanked: boolean = false;
 export let duringDraft: boolean = false;
 export let changeDuringDraft = (m: boolean) => (duringDraft = m);
 
 const balanceTeams = () => {
-  if (duringDraft || isRanked) {
+  if (duringDraft) {
     return;
   }
-  // To be used only during unranked
+  // Balance teams by moving players to maintain equal numbers
   if (red().length > blue().length + 1) {
     room.setPlayerTeam(red()[0].id, 2);
   } else if (red().length + 1 < blue().length) {
@@ -36,29 +36,35 @@ export const handlePlayerLeaveOrAFK = async () => {
     room.startGame();
   }
   await sleep(100);
-  if (!duringDraft && !isRanked) {
+  if (!duringDraft) {
     balanceTeams();
-  }
-  if (isRanked && !process.env.DEBUG) {
-    if ([...red(), ...blue()].length <= 2) {
-      isRanked = false;
-      sendMessage("Yalnızca 2 oyuncu kaldı. Sıralamalı oyun iptal ediliyor.");
-    }
   }
 };
 
 const handleWin = async (game: Game, winnerTeamId: TeamID) => {
 
   try {
-    const changes = await changeElo(game, winnerTeamId)
+    const changes = await changeLevels(game, winnerTeamId)
 
     changes.forEach((co) => {
       const p = room.getPlayer(co.id);
       if (p) {
-        sendMessage(
-          `Your ELO: ${toAug(p).elo} → ${toAug(p).elo + co.change} (${co.change > 0 ? "+" : ""}${co.change})`,
-          p,
-        );
+        const playerAug = toAug(p);
+        if (co.levelUp) {
+          sendMessage(
+            `🎉 Level Up! ${playerAug.name} → Lvl.${co.newLevel} (+${co.expGained} XP)`,
+            null, // Send to all players
+          );
+          sendMessage(
+            `Your Level: Lvl.${playerAug.level} → Lvl.${co.newLevel} (+${co.expGained} XP)`,
+            p,
+          );
+        } else {
+          sendMessage(
+            `XP Gained: +${co.expGained} (${playerAug.experience}/${co.expNeeded} to Lvl.${playerAug.level + 1})`,
+            p,
+          );
+        }
       }
     });
 
@@ -66,12 +72,14 @@ const handleWin = async (game: Game, winnerTeamId: TeamID) => {
       if (players.map((p) => p.id).includes(co.id)) {
         const pp = room.getPlayer(co.id);
         if (pp) {
-          toAug(pp).elo += co.change;
-        } // change elo on server just for showing in chat. when running two instances of the server, this may be not accurate, although it is always accurate in DB (because the changes and calculations are always based on DB data, not on in game elo. false elo will be corrected on reconnect.)
+          const playerAug = toAug(pp);
+          playerAug.experience = co.newExperience;
+          playerAug.level = co.newLevel;
+        }
       }
     });
   } catch (e) {
-    console.log("Error during handling ELO:", e);
+    console.log("Error during handling levels:", e);
   }
 };
 const red = () => room.getPlayerList().filter((p) => p.team == 1);
@@ -82,9 +90,6 @@ const both = () =>
 const ready = () => room.getPlayerList().filter((p) => !toAug(p).afk);
 
 export const addToGame = (room: RoomObject, p: PlayerObject) => {
-  if (game && isRanked && [...red(), ...blue()].length <= maxTeamSize * 2) {
-    return;
-  }
   if (game && (toAug(p).cardsAnnounced >= 2 || toAug(p).foulsMeter >= 2)) {
     return;
   }
@@ -158,65 +163,29 @@ const initChooser = (room: RoomObject) => {
     }
     const winTeam = scores.red > scores.blue ? 1 : 2;
     const loseTeam = scores.red > scores.blue ? 2 : 1;
-    if (isRanked) {
-      if (!game) {
-        return;
-      }
-      await handleWin(game, winTeam);
+    
+    // Always handle level progression for all games
+    if (!game) {
+      return;
     }
+    await handleWin(game, winTeam);
+    
     sendMessage("Break time: 10 seconds.");
     await sleep(10000);
-    const winnerIds = room
-      .getPlayerList()
-      .filter((p) => p.team == winTeam)
-      .map((p) => p.id);
-    if (ready().length >= maxTeamSize * 2) {
-      const rd = ready();
-      duringDraft = true;
-      room.getPlayerList().forEach((p) => room.setPlayerAvatar(p.id, ""));
-      const readyAndSorted = rd.sort((a, b) => toAug(b).elo - toAug(a).elo);
-      const draftResult = await performDraft(
-        room,
-        readyAndSorted,
-        maxTeamSize,
-        (p: PlayerObject) => (toAug(p).afk = true),
-      );
-      const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-        encoding: "utf8",
-        flag: "r",
-      });
-      room.setCustomStadium(rsStadium);
-      room.getPlayerList().forEach((p) => {
-        if (p.team != 0) {
-          room.setPlayerTeam(p.id, 0);
-        }
-      });
-      draftResult?.red?.forEach((p) => room.setPlayerTeam(p.id, 1));
-      draftResult?.blue?.forEach((p) => room.setPlayerTeam(p.id, 2));
-      duringDraft = false;
-      if (
-        draftResult?.red?.length == maxTeamSize &&
-        draftResult?.blue?.length == maxTeamSize
-      ) {
-        isRanked = true;
-        sendMessage("Ranked game.");
+    
+    // Simple team balancing - no more draft system
+    isRanked = false; // All games are unranked with level progression
+    let i = 0;
+    ready().forEach((p) => {
+      if (i % 2) {
+        room.setPlayerTeam(p.id, 2);
       } else {
-        sendMessage("Unranked game.");
-        isRanked = false;
-        refill();
+        room.setPlayerTeam(p.id, 1);
       }
-    } else {
-      isRanked = false;
-      let i = 0;
-      ready().forEach((p) => {
-        if (i % 2) {
-          room.setPlayerTeam(p.id, 2);
-        } else {
-          room.setPlayerTeam(p.id, 1);
-        }
-        i++;
-      });
-    }
+      i++;
+    });
+    
+    sendMessage("New game starting with level progression!");
     room.startGame();
   };
 };
