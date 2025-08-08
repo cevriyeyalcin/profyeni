@@ -6,7 +6,7 @@ import { sleep } from "./utils";
 import { toAug } from "..";
 import { teamSize } from "./settings";
 import { changeLevels } from "./levels";
-import { handlePlayerLeave as handleTeamChooserLeave } from "./teamChooser";
+import { handlePlayerLeave as handleTeamChooserLeave, checkAndShowWaitingMessage } from "./teamChooser";
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
@@ -118,6 +118,11 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
   }
   // All subsequent players (3rd, 4th, 5th...) stay as spectators (team 0)
   // They will be chosen by teams using the team chooser system
+  
+  // Check if we should show the waiting message
+  setTimeout(() => {
+    checkAndShowWaitingMessage();
+  }, 100); // Small delay to ensure team assignment is complete
 };
 
 const initChooser = (room: RoomObject) => {

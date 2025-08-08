@@ -24,6 +24,10 @@ let lastFirstTeam: 1 | 2 = 2; // Start with blue so red goes first initially
 // Selection timeout duration (30 seconds)
 const SELECTION_TIMEOUT = 30000;
 
+// Last time waiting message was shown (to prevent spam)
+let lastWaitingMessageTime = 0;
+const WAITING_MESSAGE_COOLDOWN = 10000; // 10 seconds
+
 // Helper functions
 const getRedPlayers = () => room.getPlayerList().filter(p => p.team === 1);
 const getBluePlayers = () => room.getPlayerList().filter(p => p.team === 2);
@@ -50,6 +54,27 @@ export const shouldTriggerSelection = (): boolean => {
   return spectators.length >= 2 && 
          (redCount < 6 || blueCount < 6) && 
          Math.abs(redCount - blueCount) <= 1; // Teams shouldn't be too unbalanced
+};
+
+// Check if we should show the "waiting for ball out" message
+export const checkAndShowWaitingMessage = (): void => {
+  // Don't show if selection is already active
+  if (chooserState.isActive) return;
+  
+  // Throttle message to prevent spam
+  const now = Date.now();
+  if (now - lastWaitingMessageTime < WAITING_MESSAGE_COOLDOWN) return;
+  
+  // Only show if selection should be triggered but isn't active yet
+  if (shouldTriggerSelection()) {
+    const spectators = getSpectators();
+    const message = `🟡 Top dışarıya çıkınca oyuncu değişikliği yapılacak. (${spectators.length} izleyici bekleniyor)`;
+    
+    // Send to all players as a bold yellow announcement
+    room.sendAnnouncement(message, undefined, 0xFFFF00, "bold", 1);
+    lastWaitingMessageTime = now;
+    console.log(`[TEAM_CHOOSER] Waiting for ball out - ${spectators.length} spectators ready`);
+  }
 };
 
 // Start the selection process
@@ -358,6 +383,11 @@ export const endSelection = (): void => {
   room.pauseGame(false);
   
   sendMessage("▶️ Oyuncu seçimi tamamlandı. Oyun devam ediyor!", null);
+  
+  // Check if we should show waiting message for next selection
+  setTimeout(() => {
+    checkAndShowWaitingMessage();
+  }, 1000); // Delay to let the game resume properly
 };
 
 // Force end selection (for admin commands or game events)
