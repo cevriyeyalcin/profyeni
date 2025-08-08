@@ -10,7 +10,7 @@ import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, a
 import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings } from "./settings";
 import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
 import { handleVoteBan } from "./vote";
-import { forceEndSelection, isSelectionActive, checkAndAutoBalance } from "./teamChooser";
+import { forceEndSelection, isSelectionActive, checkAndAutoBalance, shouldTriggerSelection, startSelection } from "./teamChooser";
 
 export const isCommand = (msg: string) => {
   const trimmed = msg.trim();
@@ -53,8 +53,7 @@ let globalMute = false;
 
 
 const commands: { [key: string]: commandFunc } = {
-  afk: (p) => setAfk(p),
-  back: (p) => setBack(p),
+  afk: (p) => toggleAfk(p),
   discord: (p) => showDiscord(p),
   dc: (p) => showDiscord(p),
   bb: (p) => bb(p),
@@ -305,21 +304,45 @@ const rs = (p: PlayerAugmented) => {
   sendMessage(`${p.name} haritayı değiştirdi`);
 };
 
-const setAfk = (p: PlayerAugmented) => {
-  p.afk = true;
-  room.setPlayerTeam(p.id, 0);
-  sendMessage("Artık AFK'sın.", p);
-  handlePlayerLeaveOrAFK();
-};
-
-const setBack = (p: PlayerAugmented) => {
-  if (!p.afk) {
-    sendMessage("Zaten geri döndün.", p);
-    return;
+const toggleAfk = async (p: PlayerAugmented) => {
+  if (p.afk) {
+    // Player is currently AFK, bring them back
+    p.afk = false;
+    sendMessage("🔄 AFK modundan çıktın. Takım seçimine ekleniyor...", p);
+    
+    // Check if there's an active selection first
+    if (isSelectionActive()) {
+      // Just mark as non-AFK, they'll be added to spectators automatically
+      room.setPlayerTeam(p.id, 0);
+      sendMessage("⏳ Aktif takım seçimi var. Seçim bitince oyuna dahil olacaksın.", p);
+    } else {
+      // Move to spectators and check if team selection should start
+      room.setPlayerTeam(p.id, 0);
+      
+      // Small delay to ensure team assignment is processed
+      setTimeout(() => {
+        if (shouldTriggerSelection()) {
+          startSelection();
+          sendMessage("🎯 Takım seçimi başladı! Seçilmeyi bekle.", p);
+        } else {
+          // If no team selection triggered, try to add to game normally
+          addToGame(room, room.getPlayer(p.id));
+        }
+      }, 100);
+    }
+  } else {
+    // Player is not AFK, put them in AFK mode
+    const wasInTeam = p.team !== 0;
+    p.afk = true;
+    room.setPlayerTeam(p.id, 0);
+    sendMessage("😴 AFK moduna geçtin. Tekrar !afk yazarak geri dönebilirsin.", p);
+    
+    if (wasInTeam) {
+      sendMessage("👥 Takımdan ayrıldın ve izleyiciye geçtin.", p);
+      // Handle player leaving team for auto-balancing
+      await handlePlayerLeaveOrAFK(p);
+    }
   }
-  p.afk = false;
-  addToGame(room, room.getPlayer(p.id));
-  sendMessage("Geri döndün.", p);
 };
 
 const showHelp = (p: PlayerAugmented) => {
@@ -343,16 +366,20 @@ const showHelp = (p: PlayerAugmented) => {
       p,
     );
     sendMessage(
-      `Genel Komutlar: !afk, !back, !discord, !bb, !help, !version, !script, !seviye (!level, !lvl)`,
+      `Genel Komutlar: !afk (toggle), !discord, !bb, !help, !version, !script, !seviye (!level, !lvl)`,
       p,
     );
   } else {
     sendMessage(
-      `${config.roomName} - Komutlar: !afk, !back, !discord (!dc), !bb, !help, !version, !script, !rekorseri, !ff, !oyla (!vote)`,
+      `${config.roomName} - Komutlar: !afk (toggle), !discord (!dc), !bb, !help, !version, !script, !rekorseri, !ff, !oyla (!vote)`,
       p,
     );
     sendMessage(
       `📊 Seviye Komutları: !seviye (!level, !lvl) - Seviye ve deneyim bilgilerinizi görün`,
+      p,
+    );
+    sendMessage(
+      `😴 AFK Sistemi: !afk - İlk kullanımda AFK moduna geçer (izleyiciye), ikinci kullanımda geri döner (takım seçimine)`,
       p,
     );
     sendMessage(
