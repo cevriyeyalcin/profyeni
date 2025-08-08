@@ -1,0 +1,29 @@
+{
+  "vips": [
+    {
+      "username": "ÜnyeSpor",
+      "auth": "7Qx-GEfhua4DplA-3iI4be4VqkDYX5_fSCP24pMnBy8",
+      "addedAt": 1754452849306,
+      "expiresAt": 1757044849306,
+      "addedBy": "7Qx-GEfhua4DplA-3iI4be4VqkDYX5_fSCP24pMnBy8",
+      "duration": 30
+    },
+    {
+      "username": "orewastrikerr",
+      "auth": "44hbYkN0RCe_CIaBe9sDzFzY8mrEB5tygFeOt5Vr5u8",
+      "addedAt": 1754494402167,
+      "expiresAt": 1757086402167,
+      "addedBy": "7Qx-GEfhua4DplA-3iI4be4VqkDYX5_fSCP24pMnBy8",
+      "duration": 30
+    },
+    {
+      "username": "Ogitay",
+      "auth": "Qjb-eeAKnTEwRVd9aUhtbGMSH0Q5li37Jg0Ikd0bTQo",
+      "addedAt": 1754509996885,
+      "expiresAt": 1757101996885,
+      "addedBy": "Qjb-eeAKnTEwRVd9aUhtbGMSH0Q5li37Jg0Ikd0bTQo",
+      "duration": 30,
+      "chatStyle": "italic"
+    }
+  ]
+}
