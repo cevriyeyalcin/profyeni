@@ -18,6 +18,9 @@ let chooserState: ChooserState = {
   selectionTimeout: null
 };
 
+// Track which team went first last time for alternating when teams are equal
+let lastFirstTeam: 1 | 2 = 2; // Start with blue so red goes first initially
+
 // Selection timeout duration (30 seconds)
 const SELECTION_TIMEOUT = 30000;
 
@@ -72,13 +75,24 @@ export const startSelection = (): void => {
   if (redCount < blueCount) {
     chooserState.waitingForRed = true;
     chooserState.waitingForBlue = false;
+    lastFirstTeam = 1; // Red went first
   } else if (blueCount < redCount) {
     chooserState.waitingForRed = false;
     chooserState.waitingForBlue = true;
+    lastFirstTeam = 2; // Blue went first
   } else {
-    // Equal teams, red goes first
-    chooserState.waitingForRed = true;
-    chooserState.waitingForBlue = false;
+    // Equal teams, alternate who goes first
+    if (lastFirstTeam === 1) {
+      // Red went first last time, now blue goes first
+      chooserState.waitingForRed = false;
+      chooserState.waitingForBlue = true;
+      lastFirstTeam = 2;
+    } else {
+      // Blue went first last time, now red goes first
+      chooserState.waitingForRed = true;
+      chooserState.waitingForBlue = false;
+      lastFirstTeam = 1;
+    }
   }
   
   sendSpectatorList();
@@ -97,12 +111,14 @@ const sendSpectatorList = (): void => {
   const currentTeam = chooserState.waitingForRed ? "Kırmızı" : "Mavi";
   message += `\n${currentTeam} takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
   
-  // Send to all team members of the current team
+  // Send to all team members of the current team with team colors
   const { red, blue } = getTeamMembers();
   const currentTeamMembers = chooserState.waitingForRed ? red : blue;
+  const teamColor = chooserState.waitingForRed ? 0xFF0000 : 0x0000FF; // Red or Blue
   
   currentTeamMembers.forEach(member => {
-    sendMessage(message, member);
+    // Send with team color and bold text for visibility
+    room.sendAnnouncement(message, member.id, teamColor, "bold", 2);
   });
   
   // Send info to other players (opposite team and spectators)
@@ -117,12 +133,23 @@ const sendSpectatorList = (): void => {
 
 // Handle selection command
 export const handleSelection = (player: PlayerAugmented, selection: string): boolean => {
-  if (!chooserState.isActive) return false;
+  if (!chooserState.isActive) {
+    console.log(`[TEAM_CHOOSER] Selection not active, ignoring input: ${selection} from ${player.name}`);
+    return false;
+  }
+  
+  console.log(`[TEAM_CHOOSER] Handling selection: ${selection} from ${player.name} (ID: ${player.id})`);
+  console.log(`[TEAM_CHOOSER] State: waitingForRed=${chooserState.waitingForRed}, waitingForBlue=${chooserState.waitingForBlue}`);
   
   // Check if this player is in the current selecting team
   const { red, blue } = getTeamMembers();
+  console.log(`[TEAM_CHOOSER] Red team:`, red.map(p => `${p.name}(${p.id})`));
+  console.log(`[TEAM_CHOOSER] Blue team:`, blue.map(p => `${p.name}(${p.id})`));
+  
   const isRedTeamMember = chooserState.waitingForRed && red.some(p => p.id === player.id);
   const isBlueTeamMember = chooserState.waitingForBlue && blue.some(p => p.id === player.id);
+  
+  console.log(`[TEAM_CHOOSER] Player ${player.name} - isRedTeamMember: ${isRedTeamMember}, isBlueTeamMember: ${isBlueTeamMember}`);
   
   if (!isRedTeamMember && !isBlueTeamMember) {
     sendMessage("❌ Şu anda sizin takımınızın seçim sırası değil.", player);
@@ -131,7 +158,10 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   
   // Parse selection number
   const selectionNum = parseInt(selection.trim());
+  console.log(`[TEAM_CHOOSER] Parsed selection number: ${selectionNum}, available spectators: ${chooserState.availableSpectators.length}`);
+  
   if (isNaN(selectionNum) || selectionNum < 1 || selectionNum > chooserState.availableSpectators.length) {
+    console.log(`[TEAM_CHOOSER] Invalid selection number`);
     sendMessage(`❌ Geçersiz seçim. 1-${chooserState.availableSpectators.length} arası sayı girin.`, player);
     return true;
   }
@@ -140,7 +170,10 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   const selectedPlayer = chooserState.availableSpectators[selectionNum - 1];
   const selectedPlayerObj = room.getPlayer(selectedPlayer.id);
   
+  console.log(`[TEAM_CHOOSER] Selected player: ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
+  
   if (!selectedPlayerObj) {
+    console.log(`[TEAM_CHOOSER] Selected player not found in room`);
     sendMessage("❌ Seçilen oyuncu artık odada değil.", player);
     updateSpectatorList();
     return true;
@@ -150,6 +183,7 @@ export const handleSelection = (player: PlayerAugmented, selection: string): boo
   const targetTeam = chooserState.waitingForRed ? 1 : 2;
   const teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
   
+  console.log(`[TEAM_CHOOSER] Assigning ${selectedPlayer.name} to team ${targetTeam} (${teamName})`);
   room.setPlayerTeam(selectedPlayer.id, targetTeam);
   
   // Announce selection

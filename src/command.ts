@@ -22,10 +22,20 @@ export const handleCommand = async (p: PlayerAugmented, msg: string): Promise<vo
   
   // Handle team selection numbers (when selection is active)
   if (isSelectionActive()) {
+    console.log(`[COMMAND] Selection is active, checking message: "${trimmed}" from ${p.name}`);
     const numberMatch = trimmed.match(/^\d+$/);
     if (numberMatch) {
+      console.log(`[COMMAND] Number detected: ${trimmed}, calling handleSelection`);
       const handled = handleSelection(p, trimmed);
+      console.log(`[COMMAND] handleSelection returned: ${handled}`);
       if (handled) return; // Selection consumed the message
+    } else {
+      console.log(`[COMMAND] Message "${trimmed}" is not a pure number`);
+    }
+  } else {
+    // Only log if it's a number to avoid spam
+    if (trimmed.match(/^\d+$/)) {
+      console.log(`[COMMAND] Number "${trimmed}" received but selection not active`);
     }
   }
   
