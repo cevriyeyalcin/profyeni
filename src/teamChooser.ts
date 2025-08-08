@@ -50,10 +50,10 @@ export const shouldTriggerSelection = (): boolean => {
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
-  // Need at least 2 spectators and teams are not full (max 6 per team)
-  return spectators.length >= 2 && 
+  // Need at least 1 spectator, teams not full (max 6 per team), and teams should be reasonably balanced
+  return spectators.length >= 1 && 
          (redCount < 6 || blueCount < 6) && 
-         Math.abs(redCount - blueCount) <= 1; // Teams shouldn't be too unbalanced
+         Math.abs(redCount - blueCount) <= 2; // Allow up to 2 player difference
 };
 
 // Check if we should show the "waiting for ball out" message
@@ -89,13 +89,19 @@ export const checkAndAutoBalance = (): boolean => {
   
   console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Spectators: ${specCount}`);
   
-  // Only auto-balance if teams are uneven and no spectators available  
   const teamDifference = Math.abs(redCount - blueCount);
   
-  // Don't balance if teams are equal or if spectators are available
-  if (teamDifference === 0 || specCount > 0) {
-    console.log(`[AUTO_BALANCE] No balance needed - Difference: ${teamDifference}, Spectators: ${specCount}`);
-    return false; // No need to auto-balance
+  // Don't balance if teams are already equal
+  if (teamDifference === 0) {
+    console.log(`[AUTO_BALANCE] Teams are balanced - no action needed`);
+    return false;
+  }
+  
+  // If there are spectators available, don't auto-balance (let team chooser handle it)
+  // This function is for moving players FROM teams TO spectators, not the other way around
+  if (specCount > 0) {
+    console.log(`[AUTO_BALANCE] Teams uneven but spectators available - let team chooser handle this`);
+    return false; // Let the team chooser system handle it
   }
   
   // Don't balance if there are too few players total (less than 3)
