@@ -10,6 +10,7 @@ import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, a
 import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings } from "./settings";
 import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
 import { handleVoteBan } from "./vote";
+import { handleSelection, isSelectionActive, forceEndSelection } from "./teamChooser";
 
 export const isCommand = (msg: string) => {
   const trimmed = msg.trim();
@@ -18,6 +19,15 @@ export const isCommand = (msg: string) => {
 
 export const handleCommand = async (p: PlayerAugmented, msg: string): Promise<void> => {
   const trimmed = msg.trim();
+  
+  // Handle team selection numbers (when selection is active)
+  if (isSelectionActive()) {
+    const numberMatch = trimmed.match(/^\d+$/);
+    if (numberMatch) {
+      const handled = handleSelection(p, trimmed);
+      if (handled) return; // Selection consumed the message
+    }
+  }
   
   // Handle special case for "t {mesaj}" without !
   if (trimmed.toLowerCase().startsWith("t ") && !trimmed.startsWith("!")) {
@@ -176,6 +186,20 @@ const commands: { [key: string]: commandFunc } = {
   seviye: (p, args) => showLevel(p, args),
   level: (p, args) => showLevel(p, args),
   lvl: (p, args) => showLevel(p, args),
+  
+  // Team selection commands
+  seçimiptal: (p) => {
+    if (!room.getPlayer(p.id).admin) {
+      sendMessage("Bu komutu sadece adminler kullanabilir.", p);
+      return;
+    }
+    if (isSelectionActive()) {
+      forceEndSelection();
+      sendMessage("Oyuncu seçimi iptal edildi.", p);
+    } else {
+      sendMessage("Şu anda aktif bir oyuncu seçimi yok.", p);
+    }
+  },
 };
 
 const adminLogin = (p: PlayerAugmented, args: string[]) => {
@@ -296,7 +320,7 @@ const showHelp = (p: PlayerAugmented) => {
   
   if (isAdmin) {
     sendMessage(
-      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`,
+      `${config.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !seçimiptal`,
       p,
     );
     sendMessage(

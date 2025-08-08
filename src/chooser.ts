@@ -6,6 +6,7 @@ import { sleep } from "./utils";
 import { toAug } from "..";
 import { teamSize } from "./settings";
 import { changeLevels } from "./levels";
+import { handlePlayerLeave as handleTeamChooserLeave } from "./teamChooser";
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
@@ -29,7 +30,12 @@ const balanceTeams = () => {
   }
 };
 
-export const handlePlayerLeaveOrAFK = async () => {
+export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
+  // Handle team chooser if a player left
+  if (leftPlayer) {
+    handleTeamChooserLeave(leftPlayer);
+  }
+  
   if (players.filter((p) => !p.afk).length < 1) {
     room.stopGame();
     sleep(5000); // this is important to cancel all ongoing animations when match stops

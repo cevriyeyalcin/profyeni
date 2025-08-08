@@ -881,8 +881,9 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   };
 
   room.onPlayerLeave = async (p) => {
+    const leavingPlayer = toAug(p);
     players = players.filter((pp) => p.id != pp.id);
-    await handlePlayerLeaveOrAFK();
+    await handlePlayerLeaveOrAFK(leavingPlayer);
   };
 
   room.onPlayerChat = (p, msg) => {

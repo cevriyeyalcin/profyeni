@@ -6,8 +6,6 @@ interface ChooserState {
   isActive: boolean;
   waitingForRed: boolean;
   waitingForBlue: boolean;
-  redCaptain: PlayerAugmented | null;
-  blueCaptain: PlayerAugmented | null;
   availableSpectators: PlayerAugmented[];
   selectionTimeout: NodeJS.Timeout | null;
 }
@@ -16,8 +14,6 @@ let chooserState: ChooserState = {
   isActive: false,
   waitingForRed: false,
   waitingForBlue: false,
-  redCaptain: null,
-  blueCaptain: null,
   availableSpectators: [],
   selectionTimeout: null
 };
@@ -30,14 +26,14 @@ const getRedPlayers = () => room.getPlayerList().filter(p => p.team === 1);
 const getBluePlayers = () => room.getPlayerList().filter(p => p.team === 2);
 const getSpectators = () => room.getPlayerList().filter(p => p.team === 0 && !toAug(p).afk);
 
-// Get team captains (first player in each team)
-const getTeamCaptains = () => {
+// Get all team members
+const getTeamMembers = () => {
   const redPlayers = getRedPlayers();
   const bluePlayers = getBluePlayers();
   
   return {
-    red: redPlayers.length > 0 ? toAug(redPlayers[0]) : null,
-    blue: bluePlayers.length > 0 ? toAug(bluePlayers[0]) : null
+    red: redPlayers.map(p => toAug(p)),
+    blue: bluePlayers.map(p => toAug(p))
   };
 };
 
@@ -60,15 +56,13 @@ export const startSelection = (): void => {
   const spectators = getSpectators();
   if (spectators.length < 2) return;
   
-  const { red, blue } = getTeamCaptains();
-  if (!red || !blue) return;
+  const { red, blue } = getTeamMembers();
+  if (red.length === 0 || blue.length === 0) return;
   
   // Pause the game
   room.pauseGame(true);
   
   chooserState.isActive = true;
-  chooserState.redCaptain = red;
-  chooserState.blueCaptain = blue;
   chooserState.availableSpectators = spectators.map(p => toAug(p));
   
   // Determine which team needs players more
@@ -101,42 +95,44 @@ const sendSpectatorList = (): void => {
   });
   
   const currentTeam = chooserState.waitingForRed ? "Kırmızı" : "Mavi";
-  message += `\n${currentTeam} takım kaptanı, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
+  message += `\n${currentTeam} takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
   
-  // Send to captains only
-  if (chooserState.waitingForRed && chooserState.redCaptain) {
-    sendMessage(message, chooserState.redCaptain);
-  } else if (chooserState.waitingForBlue && chooserState.blueCaptain) {
-    sendMessage(message, chooserState.blueCaptain);
-  }
+  // Send to all team members of the current team
+  const { red, blue } = getTeamMembers();
+  const currentTeamMembers = chooserState.waitingForRed ? red : blue;
   
-  // Send info to other players
+  currentTeamMembers.forEach(member => {
+    sendMessage(message, member);
+  });
+  
+  // Send info to other players (opposite team and spectators)
   const infoMessage = `⏸️ Oyun durduruldu. ${currentTeam} takımı oyuncu seçiyor...`;
-  room.getPlayerList().forEach(p => {
-    const playerAug = toAug(p);
-    if (playerAug !== chooserState.redCaptain && playerAug !== chooserState.blueCaptain) {
-      sendMessage(infoMessage, playerAug);
-    }
+  const otherTeamMembers = chooserState.waitingForRed ? blue : red;
+  const spectators = getSpectators().map(p => toAug(p));
+  
+  [...otherTeamMembers, ...spectators].forEach(player => {
+    sendMessage(infoMessage, player);
   });
 };
 
 // Handle selection command
-export const handleSelection = (captain: PlayerAugmented, selection: string): boolean => {
+export const handleSelection = (player: PlayerAugmented, selection: string): boolean => {
   if (!chooserState.isActive) return false;
   
-  // Check if this player is the current captain
-  const isRedCaptain = chooserState.waitingForRed && captain === chooserState.redCaptain;
-  const isBlueCaptin = chooserState.waitingForBlue && captain === chooserState.blueCaptain;
+  // Check if this player is in the current selecting team
+  const { red, blue } = getTeamMembers();
+  const isRedTeamMember = chooserState.waitingForRed && red.some(p => p.id === player.id);
+  const isBlueTeamMember = chooserState.waitingForBlue && blue.some(p => p.id === player.id);
   
-  if (!isRedCaptain && !isBlueCaptin) {
-    sendMessage("❌ Şu anda sizin seçim sıranız değil.", captain);
+  if (!isRedTeamMember && !isBlueTeamMember) {
+    sendMessage("❌ Şu anda sizin takımınızın seçim sırası değil.", player);
     return true; // Consume the message
   }
   
   // Parse selection number
   const selectionNum = parseInt(selection.trim());
   if (isNaN(selectionNum) || selectionNum < 1 || selectionNum > chooserState.availableSpectators.length) {
-    sendMessage(`❌ Geçersiz seçim. 1-${chooserState.availableSpectators.length} arası sayı girin.`, captain);
+    sendMessage(`❌ Geçersiz seçim. 1-${chooserState.availableSpectators.length} arası sayı girin.`, player);
     return true;
   }
   
@@ -145,7 +141,7 @@ export const handleSelection = (captain: PlayerAugmented, selection: string): bo
   const selectedPlayerObj = room.getPlayer(selectedPlayer.id);
   
   if (!selectedPlayerObj) {
-    sendMessage("❌ Seçilen oyuncu artık odada değil.", captain);
+    sendMessage("❌ Seçilen oyuncu artık odada değil.", player);
     updateSpectatorList();
     return true;
   }
@@ -157,7 +153,7 @@ export const handleSelection = (captain: PlayerAugmented, selection: string): bo
   room.setPlayerTeam(selectedPlayer.id, targetTeam);
   
   // Announce selection
-  sendMessage(`🎯 ${teamName} takımı ${selectedPlayer.name} oyuncusunu seçti!`, null);
+  sendMessage(`🎯 ${teamName} takımından ${player.name}, ${selectedPlayer.name} oyuncusunu seçti!`, null);
   
   // Remove from available spectators
   chooserState.availableSpectators = chooserState.availableSpectators.filter(p => p.id !== selectedPlayer.id);
@@ -221,7 +217,6 @@ const startSelectionTimeout = (): void => {
   
   chooserState.selectionTimeout = setTimeout(() => {
     if (chooserState.isActive) {
-      const currentCaptain = chooserState.waitingForRed ? chooserState.redCaptain : chooserState.blueCaptain;
       const teamName = chooserState.waitingForRed ? "Kırmızı" : "Mavi";
       
       sendMessage(`⏰ ${teamName} takımının seçim süresi doldu. Otomatik oyuncu atanıyor...`, null);
@@ -256,8 +251,6 @@ export const endSelection = (): void => {
   chooserState.isActive = false;
   chooserState.waitingForRed = false;
   chooserState.waitingForBlue = false;
-  chooserState.redCaptain = null;
-  chooserState.blueCaptain = null;
   chooserState.availableSpectators = [];
   
   // Resume game
@@ -282,9 +275,10 @@ export const isSelectionActive = (): boolean => {
 export const handlePlayerLeave = (player: PlayerAugmented): void => {
   if (!chooserState.isActive) return;
   
-  // If a captain leaves, end selection
-  if (player === chooserState.redCaptain || player === chooserState.blueCaptain) {
-    sendMessage("❌ Kaptan oyundan ayrıldı. Seçim iptal ediliyor.", null);
+  // If all members of a team leave, end selection
+  const { red, blue } = getTeamMembers();
+  if (red.length === 0 || blue.length === 0) {
+    sendMessage("❌ Bir takımın tüm üyeleri oyundan ayrıldı. Seçim iptal ediliyor.", null);
     endSelection();
     return;
   }
@@ -294,7 +288,7 @@ export const handlePlayerLeave = (player: PlayerAugmented): void => {
   if (wasSpectator) {
     updateSpectatorList();
     if (chooserState.availableSpectators.length > 0) {
-      sendSpectatorList(); // Refresh the list for captains
+      sendSpectatorList(); // Refresh the list for team members
     }
   }
 };
