@@ -60,10 +60,8 @@ export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
       balanceTeams();
     }
     
-    // Check if waiting message should be shown after balancing
-    setTimeout(() => {
-      checkAndShowWaitingMessage();
-    }, 500);
+    // Check if waiting message should be shown after balancing (now debounced internally)
+    checkAndShowWaitingMessage();
   }
 };
 
@@ -145,11 +143,8 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
   // All subsequent players (3rd, 4th, 5th...) stay as spectators (team 0)
   // They will be chosen by teams using the team chooser system
   
-  // Check if we should show the waiting message
-  // Use a longer delay to allow validation checks to complete first
-  setTimeout(() => {
-    checkAndShowWaitingMessage();
-  }, 500); // Longer delay to ensure validation checks complete first
+  // Check if we should show the waiting message (now debounced internally)
+  checkAndShowWaitingMessage();
 };
 
 const initChooser = (room: RoomObject) => {

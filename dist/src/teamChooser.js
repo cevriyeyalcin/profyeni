@@ -26,6 +26,8 @@ const chooserState = {
 const SELECTION_TIMEOUT = 30000; // 30 seconds
 const WAITING_MESSAGE_COOLDOWN = 5000; // 5 seconds
 let lastWaitingMessageTime = 0;
+let waitingMessageTimeout = null;
+let spectatorListTimeout = null;
 // Track which team went first last time for alternating when teams are equal
 let lastFirstTeam = 2; // Start with blue so red goes first initially
 // State validation and consistency checks
@@ -149,8 +151,8 @@ const shouldTriggerSelection = () => {
         Math.abs(redCount - blueCount) <= 2; // Allow up to 2 player difference
 };
 exports.shouldTriggerSelection = shouldTriggerSelection;
-// Check if we should show the "waiting for ball out" message
-const checkAndShowWaitingMessage = () => {
+// Debounced function to show waiting message
+const debouncedShowWaitingMessage = () => {
     // Don't show waiting message during team rotation
     if ((0, index_1.getTeamRotationInProgress)()) {
         return;
@@ -197,6 +199,18 @@ const checkAndShowWaitingMessage = () => {
         // All spectators are AFK or invalid - log this situation
         console.log(`[TEAM_CHOOSER] Found ${spectators.length} spectators but none are valid (likely AFK or left)`);
     }
+};
+// Check if we should show the "waiting for ball out" message (debounced)
+const checkAndShowWaitingMessage = () => {
+    // Clear any existing timeout to debounce rapid calls
+    if (waitingMessageTimeout) {
+        clearTimeout(waitingMessageTimeout);
+    }
+    // Set a new timeout to debounce the message
+    waitingMessageTimeout = setTimeout(() => {
+        debouncedShowWaitingMessage();
+        waitingMessageTimeout = null;
+    }, 1000); // 1 second debounce delay
 };
 exports.checkAndShowWaitingMessage = checkAndShowWaitingMessage;
 // Check if teams are uneven and auto-balance by moving players to spectators
@@ -512,8 +526,8 @@ const checkContinueSelection = () => {
     console.log(`[TEAM_CHOOSER] Should continue: ${shouldContinue}`);
     return shouldContinue;
 };
-// Send numbered spectator list to captains
-const sendSpectatorList = () => {
+// Send numbered spectator list to captains (internal function)
+const debouncedSendSpectatorList = () => {
     if (!chooserState.isActive)
         return;
     let message = "🔄 Oyuncu Seçimi:\n";
@@ -571,6 +585,18 @@ const sendSpectatorList = () => {
     spectators.forEach(player => {
         (0, message_1.sendMessage)(infoMessage, player);
     });
+};
+// Send numbered spectator list to captains (debounced)
+const sendSpectatorList = () => {
+    // Clear any existing timeout to debounce rapid calls
+    if (spectatorListTimeout) {
+        clearTimeout(spectatorListTimeout);
+    }
+    // Set a new timeout to debounce the spectator list sending
+    spectatorListTimeout = setTimeout(() => {
+        debouncedSendSpectatorList();
+        spectatorListTimeout = null;
+    }, 500); // 500ms debounce delay for spectator list
 };
 // Enhanced team selection timeout with deadlock prevention
 const startSelectionTimeout = () => {
