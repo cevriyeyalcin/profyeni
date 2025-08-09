@@ -464,48 +464,92 @@ const applyTeamRotation = (winnerTeam: number, loserTeam: number) => {
     // Mevcut takımları topla ve isimleri ile logla
     const winners = allPlayers.filter(p => p.team === winnerTeam);
     const losers = allPlayers.filter(p => p.team === loserTeam);
-    const spectators = allPlayers.filter(p => p.team === 0);
-
-    // 1. Önce spec'dekileri kaybeden takıma al (kaybedenler spec'e geçmeden önce)
-    const playersToMove = spectators.slice(0, 6); // Maksimum 6 kişi
+    const initialSpectators = allPlayers.filter(p => p.team === 0);
     
-    playersToMove.forEach(player => {
-      room.setPlayerTeam(player.id, loserTeam);
-    });
+    const initialSpecCount = initialSpectators.length;
     
-    if (playersToMove.length > 0) {
-      const teamName = loserTeam === 1 ? 'Kırmızı' : 'Mavi';
-      sendMessage(`🔄 ${playersToMove.length} izleyici oyuncu ${teamName} takıma geçti!`);
-    }
+    console.log(`[TEAM_ROTATION] Initial state - Winners: ${winners.length}, Losers: ${losers.length}, Spectators: ${initialSpecCount}`);
     
-    // 2 saniye bekle, sonra kaybedenleri spec'e al
-    setTimeout(() => {
+    if (initialSpecCount === 0) {
+      // Case 1: No initial spectators - Direct team swap
+      console.log(`[TEAM_ROTATION] No initial spectators - performing direct team swap`);
       
-      // Güncel takım durumunu kontrol et
-      const currentPlayers = room.getPlayerList();
-      const currentLosers = currentPlayers.filter(p => p.team === loserTeam);
-      
-      // Orijinal kaybedenleri spec'e al (yeni gelenleri değil)
+      // Move losers to spectators first
       losers.forEach(player => {
-        const currentPlayer = room.getPlayer(player.id);
-        if (currentPlayer && currentPlayer.team === loserTeam) {
-          room.setPlayerTeam(player.id, 0);
-        } else {
-        }
+        room.setPlayerTeam(player.id, 0);
       });
       
       sendMessage(`🔄 Eski ${loserTeam === 1 ? 'Kırmızı' : 'Mavi'} takım oyuncuları izleyiciye geçti...`);
       
-      // Final durum kontrolü
+      // Wait 2 seconds, then move them back to the losing team (essentially swapping teams)
       setTimeout(() => {
-        const finalPlayers = room.getPlayerList();
+        const currentSpectators = room.getPlayerList().filter(p => p.team === 0);
         
-        // Yeni maçı başlat
-        sendMessage("🚀 Yeni maç başlatılıyor...");
-        room.startGame();
-      }, 1500);
+        // Move the former losers (now spectators) back to the losing team
+        // This creates the team swap effect
+        losers.forEach(player => {
+          const currentPlayer = room.getPlayer(player.id);
+          if (currentPlayer && currentPlayer.team === 0) {
+            room.setPlayerTeam(player.id, loserTeam);
+          }
+        });
+        
+        const teamName = loserTeam === 1 ? 'Kırmızı' : 'Mavi';
+        sendMessage(`🔄 Takımlar yer değiştirdi! Eski ${loserTeam === 1 ? 'Kırmızı' : 'Mavi'} takım oyuncuları ${teamName} takıma geçti.`);
+        
+        // Start new game
+        setTimeout(() => {
+          sendMessage("🚀 Yeni maç başlatılıyor...");
+          room.startGame();
+        }, 1500);
+        
+      }, 2000);
       
-    }, 2000); // 2 saniye bekle
+    } else {
+      // Case 2: There are initial spectators - Normal rotation with spectator integration
+      console.log(`[TEAM_ROTATION] ${initialSpecCount} initial spectators - performing rotation with spectator integration`);
+      
+      // 1. First move some spectators to the losing team (before losers go to spectators)
+      const spectatorsToMove = initialSpectators.slice(0, Math.min(6, Math.max(1, Math.floor(losers.length / 2)))); // Move 1-6 based on loser count
+      
+      spectatorsToMove.forEach(player => {
+        room.setPlayerTeam(player.id, loserTeam);
+      });
+      
+      if (spectatorsToMove.length > 0) {
+        const teamName = loserTeam === 1 ? 'Kırmızı' : 'Mavi';
+        sendMessage(`🔄 ${spectatorsToMove.length} izleyici oyuncu ${teamName} takıma geçti!`);
+      }
+      
+      // 2. Wait 2 seconds, then move original losers to spectators
+      setTimeout(() => {
+        
+        // Move original losers to spectators
+        losers.forEach(player => {
+          const currentPlayer = room.getPlayer(player.id);
+          if (currentPlayer && currentPlayer.team === loserTeam) {
+            room.setPlayerTeam(player.id, 0);
+          }
+        });
+        
+        sendMessage(`🔄 Eski ${loserTeam === 1 ? 'Kırmızı' : 'Mavi'} takım oyuncuları izleyiciye geçti...`);
+        
+        // Final state check and start new game
+        setTimeout(() => {
+          const finalPlayers = room.getPlayerList();
+          const finalRed = finalPlayers.filter(p => p.team === 1).length;
+          const finalBlue = finalPlayers.filter(p => p.team === 2).length;
+          const finalSpecs = finalPlayers.filter(p => p.team === 0).length;
+          
+          console.log(`[TEAM_ROTATION] Final state - Red: ${finalRed}, Blue: ${finalBlue}, Spectators: ${finalSpecs}`);
+          
+          // Start new game
+          sendMessage("🚀 Yeni maç başlatılıyor...");
+          room.startGame();
+        }, 1500);
+        
+      }, 2000);
+    }
     
   } catch (error) {
     console.error("Takım rotasyonu hatası:", error);
