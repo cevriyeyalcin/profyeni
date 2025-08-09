@@ -456,6 +456,13 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       return true;
     }
     
+    // Quick validation of spectator list consistency
+    if (chooserState.spectators.length === 0) {
+      console.log(`[TEAM_CHOOSER] No spectators available for selection by ${player.name}`);
+      sendMessage("❌ Seçilebilecek oyuncu kalmadı.", player);
+      return true;
+    }
+    
     // Determine team eligibility
     const redCount = chooserState.redTeam.length;
     const blueCount = chooserState.blueTeam.length;
@@ -500,8 +507,11 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
     const selectedPlayer = chooserState.spectators[selectionNum - 1];
     const selectedPlayerObj = room.getPlayer(selectedPlayer.id);
     
+    console.log(`[TEAM_CHOOSER] Selection validation - Player: ${selectedPlayer.name} (ID: ${selectedPlayer.id}), Found: ${!!selectedPlayerObj}, Team: ${selectedPlayerObj?.team}`);
+    
     if (!selectedPlayerObj || selectedPlayerObj.team !== 0) {
       sendMessage("❌ Seçilen oyuncu artık mevcut değil.", player);
+      console.log(`[TEAM_CHOOSER] Player no longer available, updating spectator list`);
       updateSpectatorListNonBlocking();
       sendSpectatorList();
       return true;
@@ -510,6 +520,18 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
     // Check for duplicate selection
     if (chooserState.selections[selectedPlayer.id]) {
       sendMessage("❌ Bu oyuncu zaten seçildi.", player);
+      console.log(`[TEAM_CHOOSER] Duplicate selection detected for player ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
+      return true;
+    }
+    
+    // Double-check that player is still in spectators (additional safety check)
+    const currentValidSpectators = getValidSpectators();
+    const isStillSpectator = currentValidSpectators.some(spec => spec.id === selectedPlayer.id);
+    if (!isStillSpectator) {
+      sendMessage("❌ Seçilen oyuncu artık izleyici değil.", player);
+      console.log(`[TEAM_CHOOSER] Player ${selectedPlayer.name} (ID: ${selectedPlayer.id}) is no longer a valid spectator`);
+      updateSpectatorListNonBlocking();
+      sendSpectatorList();
       return true;
     }
     
@@ -525,7 +547,10 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
     
     // Update state
     chooserState.selections[selectedPlayer.id] = targetTeam;
+    const previousSpectatorCount = chooserState.spectators.length;
     chooserState.spectators = chooserState.spectators.filter(p => p.id !== selectedPlayer.id);
+    
+    console.log(`[TEAM_CHOOSER] Updated spectator list - Previous: ${previousSpectatorCount}, Current: ${chooserState.spectators.length}, Removed: ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
     
     // Update validation hash
     chooserState.validationHash = generateStateHash();
