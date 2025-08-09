@@ -257,7 +257,6 @@ export class Game {
     forfeitingTeam: number;
     winningTeam: number;
   };
-  balanceCheckedForCurrentOut: boolean;
 
   constructor() {
     gameId += 1;
@@ -305,7 +304,6 @@ export class Game {
         forfeitingTeam: 0,
         winningTeam: 0
       };
-      this.balanceCheckedForCurrentOut = false;
   }
   rotateBall() {
     rotateBall(this);
@@ -1226,8 +1224,6 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
     clearThrowInBlocks();
     if (game) {
       game.animation = false;
-      // Reset balance check flag for next ball-out event
-      game.balanceCheckedForCurrentOut = false;
       room.setDiscProperties(0, {
         xspeed: 0,
         yspeed: 0,
