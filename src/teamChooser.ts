@@ -31,16 +31,39 @@ const WAITING_MESSAGE_COOLDOWN = 10000; // 10 seconds
 // Helper functions
 const getRedPlayers = () => room.getPlayerList().filter(p => p.team === 1);
 const getBluePlayers = () => room.getPlayerList().filter(p => p.team === 2);
-const getSpectators = () => room.getPlayerList().filter(p => p.team === 0 && !toAug(p).afk);
+const getSpectators = () => {
+  return room.getPlayerList().filter(p => {
+    if (p.team !== 0) return false;
+    try {
+      return !toAug(p).afk;
+    } catch (error) {
+      // Player likely just left but still in room.getPlayerList()
+      console.warn(`[getSpectators] Player ${p.id} not found in players array, skipping`);
+      return false;
+    }
+  });
+};
 
 // Get all team members
 const getTeamMembers = () => {
   const redPlayers = getRedPlayers();
   const bluePlayers = getBluePlayers();
   
+  // Safely map players, filtering out any that might have just left
+  const safeMapToAug = (players: PlayerObject[]) => {
+    return players.map(p => {
+      try {
+        return toAug(p);
+      } catch (error) {
+        console.warn(`[getTeamMembers] Player ${p.id} not found in players array, skipping`);
+        return null;
+      }
+    }).filter(p => p !== null) as PlayerAugmented[];
+  };
+  
   return {
-    red: redPlayers.map(p => toAug(p)),
-    blue: bluePlayers.map(p => toAug(p))
+    red: safeMapToAug(redPlayers),
+    blue: safeMapToAug(bluePlayers)
   };
 };
 
@@ -157,7 +180,14 @@ export const startSelection = (): void => {
   room.pauseGame(true);
   
   chooserState.isActive = true;
-  chooserState.availableSpectators = spectators.map(p => toAug(p));
+  chooserState.availableSpectators = spectators.map(p => {
+    try {
+      return toAug(p);
+    } catch (error) {
+      console.warn(`[startSelection] Player ${p.id} not found in players array, skipping`);
+      return null;
+    }
+  }).filter(p => p !== null) as PlayerAugmented[];
   
   // Determine which teams can choose based on balance
   const redCount = getRedPlayers().length;
@@ -193,7 +223,14 @@ const sendSpectatorList = (): void => {
   });
   
   const { red, blue } = getTeamMembers();
-  const spectators = getSpectators().map(p => toAug(p));
+  const spectators = getSpectators().map(p => {
+    try {
+      return toAug(p);
+    } catch (error) {
+      console.warn(`[sendSpectatorList] Player ${p.id} not found in players array, skipping`);
+      return null;
+    }
+  }).filter(p => p !== null) as PlayerAugmented[];
   
   // Send to red team if they can choose
   if (chooserState.waitingForRed) {
@@ -391,7 +428,14 @@ const checkContinueSelection = (): boolean => {
 const updateSpectatorList = (): void => {
   if (!chooserState.isActive) return;
   
-  const currentSpectators = getSpectators().map(p => toAug(p));
+  const currentSpectators = getSpectators().map(p => {
+    try {
+      return toAug(p);
+    } catch (error) {
+      console.warn(`[updateSpectatorList] Player ${p.id} not found in players array, skipping`);
+      return null;
+    }
+  }).filter(p => p !== null) as PlayerAugmented[];
   chooserState.availableSpectators = chooserState.availableSpectators.filter(spec => 
     currentSpectators.some(current => current.id === spec.id)
   );

@@ -416,6 +416,7 @@ export let players: PlayerAugmented[] = [];
 export let toAug = (p: PlayerObject) => {
   const found = players.find((pp) => pp.id == p.id);
   if (!found) {
+    console.warn(`[WARNING] Player ID ${p.id} not found in players array - likely just left. Skipping.`);
     throw `${p.id} ID'li oyuncu aranırken hata oluştu. Oyuncu, oyuncular dizisinde bulunamadı: ${JSON.stringify(players)}`;
   }
   return found;
