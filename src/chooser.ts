@@ -1,4 +1,4 @@
-import { room, players, PlayerAugmented, db, getTeamRotationInProgress } from "..";
+import { room, players, PlayerAugmented, db, getTeamRotationInProgress, setFinalScores } from "..";
 import * as fs from "fs";
 import { sendMessage } from "./message";
 import { game, Game } from "..";
@@ -7,6 +7,9 @@ import { toAug } from "..";
 import { teamSize } from "./settings";
 import { changeLevels } from "./levels";
 import { handlePlayerLeave as handleTeamChooserLeave, checkAndShowWaitingMessage, checkAndAutoBalance } from "./teamChooser";
+
+// Import finalScores setter from index
+declare let finalScores: {red: number, blue: number} | null;
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
@@ -204,6 +207,11 @@ const initChooser = (room: RoomObject) => {
     if (duringDraft) {
       return;
     }
+    
+    // Set finalScores for normal victories so onGameStop handles them correctly
+    setFinalScores({red: scores.red, blue: scores.blue});
+    console.log(`[TEAM_VICTORY] Normal victory detected - Red: ${scores.red}, Blue: ${scores.blue}`);
+    
     if (_onTeamVictory) {
       _onTeamVictory(scores);
     }
@@ -219,20 +227,11 @@ const initChooser = (room: RoomObject) => {
     sendMessage("Break time: 10 seconds.");
     await sleep(10000);
     
-    // Simple team balancing - no more draft system
-    isRanked = false; // All games are unranked with level progression
-    let i = 0;
-    ready().forEach((p) => {
-      if (i % 2) {
-        room.setPlayerTeam(p.id, 2);
-      } else {
-        room.setPlayerTeam(p.id, 1);
-      }
-      i++;
-    });
+    // Stop the game so onGameStop is called with finalScores set
+    room.stopGame();
     
-    sendMessage("New game starting with level progression!");
-    room.startGame();
+    // Note: The rest of the logic (team balancing, restart) is now handled in onGameStop
+    // This prevents the "berabere bitti" message since finalScores is properly set
   };
 };
 

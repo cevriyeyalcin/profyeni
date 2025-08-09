@@ -187,6 +187,9 @@ const initChooser = (room) => {
         if (exports.duringDraft) {
             return;
         }
+        // Set finalScores for normal victories so onGameStop handles them correctly
+        (0, __1.setFinalScores)({ red: scores.red, blue: scores.blue });
+        console.log(`[TEAM_VICTORY] Normal victory detected - Red: ${scores.red}, Blue: ${scores.blue}`);
         if (_onTeamVictory) {
             _onTeamVictory(scores);
         }
@@ -199,20 +202,10 @@ const initChooser = (room) => {
         yield handleWin(__2.game, winTeam);
         (0, message_1.sendMessage)("Break time: 10 seconds.");
         yield (0, utils_1.sleep)(10000);
-        // Simple team balancing - no more draft system
-        isRanked = false; // All games are unranked with level progression
-        let i = 0;
-        ready().forEach((p) => {
-            if (i % 2) {
-                room.setPlayerTeam(p.id, 2);
-            }
-            else {
-                room.setPlayerTeam(p.id, 1);
-            }
-            i++;
-        });
-        (0, message_1.sendMessage)("New game starting with level progression!");
-        room.startGame();
+        // Stop the game so onGameStop is called with finalScores set
+        room.stopGame();
+        // Note: The rest of the logic (team balancing, restart) is now handled in onGameStop
+        // This prevents the "berabere bitti" message since finalScores is properly set
     });
 };
 exports.default = initChooser;

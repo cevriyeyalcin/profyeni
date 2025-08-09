@@ -310,6 +310,7 @@ const rs = (p) => {
         (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
         return;
     }
+    (0, index_1.setAdminGameStop)(true); // Set flag before stopping game
     index_1.room.stopGame();
     const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
         encoding: "utf8",

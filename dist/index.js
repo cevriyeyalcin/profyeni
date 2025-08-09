@@ -45,7 +45,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateWinStreak = exports.adminPass = exports.db = exports.game = exports.room = exports.toAug = exports.players = exports.Game = exports.PlayerAugmented = exports.version = exports.getTeamRotationInProgress = void 0;
+exports.updateWinStreak = exports.adminPass = exports.db = exports.game = exports.room = exports.toAug = exports.players = exports.Game = exports.PlayerAugmented = exports.version = exports.setFinalScores = exports.setAdminGameStop = exports.getTeamRotationInProgress = void 0;
 const chooser_1 = require("./src/chooser");
 const teamChooser_1 = require("./src/teamChooser");
 const command_1 = require("./src/command");
@@ -69,6 +69,13 @@ let finalScores = null;
 let isTeamRotationInProgress = false;
 const getTeamRotationInProgress = () => isTeamRotationInProgress;
 exports.getTeamRotationInProgress = getTeamRotationInProgress;
+// Admin-initiated game stop flag to prevent incorrect draw messages
+let isAdminGameStop = false;
+const setAdminGameStop = (value) => { isAdminGameStop = value; };
+exports.setAdminGameStop = setAdminGameStop;
+// Setter for finalScores so other modules can set it for normal victories
+const setFinalScores = (scores) => { finalScores = scores; };
+exports.setFinalScores = setFinalScores;
 const getFieldZone = (x, y) => {
     // Saha bölgelerini tanımla
     if (x < -100)
@@ -1083,6 +1090,13 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
     };
     exports.room.onGameStop = (byUser) => {
         if (exports.game) {
+            // Check if this was an admin-initiated stop (like !rs command)
+            if (isAdminGameStop) {
+                console.log(`[GAME_STOP] Admin-initiated stop detected - skipping normal end game logic`);
+                isAdminGameStop = false; // Reset flag
+                exports.game = null;
+                return;
+            }
             // Check if game ended by forfeit first
             if (exports.game.endedByForfeit.hasForfeited) {
                 // Game ended by forfeit - winner already determined

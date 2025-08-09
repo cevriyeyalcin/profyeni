@@ -33,6 +33,9 @@ export const getTeamRotationInProgress = () => isTeamRotationInProgress;
 let isAdminGameStop = false;
 export const setAdminGameStop = (value: boolean) => { isAdminGameStop = value; };
 
+// Setter for finalScores so other modules can set it for normal victories
+export const setFinalScores = (scores: {red: number, blue: number} | null) => { finalScores = scores; };
+
 // Streak records system
 interface StreakRecord {
   count: number;
