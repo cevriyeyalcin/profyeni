@@ -398,7 +398,7 @@ export const startSelection = async (): Promise<void> => {
       }
     }
     
-    sendSpectatorList();
+    sendSpectatorList(true); // Immediate initial list
     startSelectionTimeout();
     
     console.log(`[TEAM_CHOOSER] Selection started successfully`);
@@ -513,7 +513,7 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       sendMessage("❌ Seçilen oyuncu artık mevcut değil.", player);
       console.log(`[TEAM_CHOOSER] Player no longer available, updating spectator list`);
       updateSpectatorListNonBlocking();
-      sendSpectatorList();
+      sendSpectatorList(true); // Immediate update after validation failure
       return true;
     }
     
@@ -531,7 +531,7 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       sendMessage("❌ Seçilen oyuncu artık izleyici değil.", player);
       console.log(`[TEAM_CHOOSER] Player ${selectedPlayer.name} (ID: ${selectedPlayer.id}) is no longer a valid spectator`);
       updateSpectatorListNonBlocking();
-      sendSpectatorList();
+      sendSpectatorList(true); // Immediate update after validation failure
       return true;
     }
     
@@ -579,7 +579,7 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       chooserState.redTeam = getRedPlayers().map(p => toAug(p));
       chooserState.blueTeam = getBluePlayers().map(p => toAug(p));
       
-      sendSpectatorList();
+      sendSpectatorList(true); // Immediate update after selection
       startSelectionTimeout();
     } else {
       // Schedule endSelection to run after this mutex is released
@@ -621,9 +621,12 @@ const checkContinueSelection = (): boolean => {
 const debouncedSendSpectatorList = (): void => {
   if (!chooserState.isActive) return;
   
+  console.log(`[TEAM_CHOOSER] Sending updated spectator list with ${chooserState.spectators.length} players`);
+  
   let message = "🔄 Oyuncu Seçimi:\n";
   chooserState.spectators.forEach((spec, index) => {
     message += `${index + 1}. ${spec.name} [Lvl.${spec.level}]\n`;
+    console.log(`[TEAM_CHOOSER] List entry: ${index + 1}. ${spec.name} (ID: ${spec.id})`);
   });
   
   const redPlayers = getRedPlayers();
@@ -682,7 +685,14 @@ const debouncedSendSpectatorList = (): void => {
 };
 
 // Send numbered spectator list to captains (debounced)
-const sendSpectatorList = (): void => {
+const sendSpectatorList = (immediate: boolean = false): void => {
+  // For immediate updates (after successful selections), bypass debouncing
+  if (immediate) {
+    console.log(`[TEAM_CHOOSER] Sending immediate spectator list update`);
+    debouncedSendSpectatorList();
+    return;
+  }
+  
   // Clear any existing timeout to debounce rapid calls
   if (spectatorListTimeout) {
     clearTimeout(spectatorListTimeout);
@@ -692,7 +702,7 @@ const sendSpectatorList = (): void => {
   spectatorListTimeout = setTimeout(() => {
     debouncedSendSpectatorList();
     spectatorListTimeout = null;
-  }, 500); // 500ms debounce delay for spectator list
+  }, 200); // Reduced to 200ms debounce delay for faster updates
 };
 
 // Enhanced team selection timeout with deadlock prevention
@@ -746,7 +756,7 @@ const startSelectionTimeout = (): void => {
                                 Math.abs(newRedCount - newBlueCount) <= 1;
           
           if (shouldContinue) {
-            sendSpectatorList();
+            sendSpectatorList(true); // Immediate update after auto-assignment
             startSelectionTimeout();
           } else {
             endSelection();
@@ -868,7 +878,7 @@ export const handlePlayerLeave = async (player: PlayerAugmented): Promise<void> 
       if (wasSpectator) {
         updateSpectatorListNonBlocking();
         if (chooserState.spectators.length > 0) {
-          sendSpectatorList();
+          sendSpectatorList(true); // Immediate update after player leave
         }
       }
       
