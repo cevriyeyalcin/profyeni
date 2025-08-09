@@ -1,4 +1,4 @@
-import { room, players, PlayerAugmented, db } from "..";
+import { room, players, PlayerAugmented, db, getTeamRotationInProgress, setFinalScores } from "..";
 import * as fs from "fs";
 import { sendMessage } from "./message";
 import { game, Game } from "..";
@@ -7,6 +7,9 @@ import { toAug } from "..";
 import { teamSize } from "./settings";
 import { changeLevels } from "./levels";
 import { handlePlayerLeave as handleTeamChooserLeave, checkAndShowWaitingMessage, checkAndAutoBalance } from "./teamChooser";
+
+// Import finalScores setter from index
+declare let finalScores: {red: number, blue: number} | null;
 
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
@@ -31,6 +34,12 @@ const balanceTeams = () => {
 };
 
 export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
+  // Don't handle team changes during rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[CHOOSER] Team rotation in progress - skipping player leave/AFK handling`);
+    return;
+  }
+  
   // Handle team chooser if a player left
   if (leftPlayer) {
     handleTeamChooserLeave(leftPlayer);
@@ -51,10 +60,8 @@ export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
       balanceTeams();
     }
     
-    // Check if waiting message should be shown after balancing
-    setTimeout(() => {
-      checkAndShowWaitingMessage();
-    }, 500);
+    // Check if waiting message should be shown after balancing (now debounced internally)
+    checkAndShowWaitingMessage();
   }
 };
 
@@ -114,6 +121,12 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
     return;
   }
   
+  // Don't assign players to teams during rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[CHOOSER] Team rotation in progress - skipping player assignment`);
+    return;
+  }
+
   // Only assign first 2 players to teams (1 red, 1 blue)
   // All other players stay as spectators for team chooser system
   const redCount = red().length;
@@ -130,11 +143,8 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
   // All subsequent players (3rd, 4th, 5th...) stay as spectators (team 0)
   // They will be chosen by teams using the team chooser system
   
-  // Check if we should show the waiting message
-  // Use a longer delay to allow validation checks to complete first
-  setTimeout(() => {
-    checkAndShowWaitingMessage();
-  }, 500); // Longer delay to ensure validation checks complete first
+  // Check if we should show the waiting message (now debounced internally)
+  checkAndShowWaitingMessage();
 };
 
 const initChooser = (room: RoomObject) => {
@@ -192,6 +202,11 @@ const initChooser = (room: RoomObject) => {
     if (duringDraft) {
       return;
     }
+    
+    // Set finalScores for normal victories so onGameStop handles them correctly
+    setFinalScores({red: scores.red, blue: scores.blue});
+    console.log(`[TEAM_VICTORY] Normal victory detected - Red: ${scores.red}, Blue: ${scores.blue}`);
+    
     if (_onTeamVictory) {
       _onTeamVictory(scores);
     }
@@ -207,20 +222,11 @@ const initChooser = (room: RoomObject) => {
     sendMessage("Break time: 10 seconds.");
     await sleep(10000);
     
-    // Simple team balancing - no more draft system
-    isRanked = false; // All games are unranked with level progression
-    let i = 0;
-    ready().forEach((p) => {
-      if (i % 2) {
-        room.setPlayerTeam(p.id, 2);
-      } else {
-        room.setPlayerTeam(p.id, 1);
-      }
-      i++;
-    });
+    // Stop the game so onGameStop is called with finalScores set
+    room.stopGame();
     
-    sendMessage("New game starting with level progression!");
-    room.startGame();
+    // Note: The rest of the logic (team balancing, restart) is now handled in onGameStop
+    // This prevents the "berabere bitti" message since finalScores is properly set
   };
 };
 

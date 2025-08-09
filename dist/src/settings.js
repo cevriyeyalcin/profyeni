@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSlowModeEnabled = exports.setSlowModeEnabled = exports.slowModeSettings = exports.isSlowModeEnabled = exports.getLanguage = exports.setLanguage = exports.currentLanguage = exports.teamSize = exports.getOffsideEnabled = exports.setOffsideEnabled = exports.isOffsideEnabled = exports.offsideDiscs = exports.thirdBallId = exports.secondBallId = exports.colors = exports.defaults = exports.penaltyPoint = exports.box = exports.goals = exports.mapBounds = void 0;
+exports.getDuplicateBlockingEnabled = exports.setDuplicateBlockingEnabled = exports.isDuplicateBlockingEnabled = exports.getSlowModeEnabled = exports.setSlowModeEnabled = exports.slowModeSettings = exports.isSlowModeEnabled = exports.getLanguage = exports.setLanguage = exports.currentLanguage = exports.teamSize = exports.getOffsideEnabled = exports.setOffsideEnabled = exports.isOffsideEnabled = exports.offsideDiscs = exports.thirdBallId = exports.secondBallId = exports.colors = exports.defaults = exports.penaltyPoint = exports.box = exports.goals = exports.mapBounds = void 0;
 exports.mapBounds = { x: 1150, y: 610 };
 exports.goals = { y: 124 };
 exports.box = { x: 840, y: 320 };
@@ -57,3 +57,13 @@ const getSlowModeEnabled = () => {
     return exports.isSlowModeEnabled;
 };
 exports.getSlowModeEnabled = getSlowModeEnabled;
+// Duplicate connection blocking system
+exports.isDuplicateBlockingEnabled = true;
+const setDuplicateBlockingEnabled = (enabled) => {
+    exports.isDuplicateBlockingEnabled = enabled;
+};
+exports.setDuplicateBlockingEnabled = setDuplicateBlockingEnabled;
+const getDuplicateBlockingEnabled = () => {
+    return exports.isDuplicateBlockingEnabled;
+};
+exports.getDuplicateBlockingEnabled = getDuplicateBlockingEnabled;

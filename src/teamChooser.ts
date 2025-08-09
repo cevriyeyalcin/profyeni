@@ -1,32 +1,89 @@
-import { room, players, PlayerAugmented, toAug } from "../index";
+import { room, players, PlayerAugmented, db, getTeamRotationInProgress, setFinalScores, toAug } from "../index";
 import { sendMessage } from "./message";
+import { teamMutex, safeSetPlayerTeam, setPlayerTeamDirect, conditionalSetPlayerTeam } from "./teamMutex";
 
-// Team chooser state
+// Team chooser state with enhanced protection
 interface ChooserState {
   isActive: boolean;
-  waitingForRed: boolean;
-  waitingForBlue: boolean;
-  availableSpectators: PlayerAugmented[];
-  selectionTimeout: NodeJS.Timeout | null;
+  spectators: PlayerAugmented[];
+  redTeam: PlayerAugmented[];
+  blueTeam: PlayerAugmented[];
+  selections: { [key: string]: number };
+  timeout: NodeJS.Timeout | null;
+  startTime: number | null;
+  validationHash: string | null; // For state consistency checks
 }
 
-let chooserState: ChooserState = {
+const chooserState: ChooserState = {
   isActive: false,
-  waitingForRed: false,
-  waitingForBlue: false,
-  availableSpectators: [],
-  selectionTimeout: null
+  spectators: [],
+  redTeam: [],
+  blueTeam: [],
+  selections: {},
+  timeout: null,
+  startTime: null,
+  validationHash: null
 };
+
+const SELECTION_TIMEOUT = 30000; // 30 seconds
+const WAITING_MESSAGE_COOLDOWN = 5000; // 5 seconds
+let lastWaitingMessageTime = 0;
+let waitingMessageTimeout: NodeJS.Timeout | null = null;
+let spectatorListTimeout: NodeJS.Timeout | null = null;
 
 // Track which team went first last time for alternating when teams are equal
 let lastFirstTeam: 1 | 2 = 2; // Start with blue so red goes first initially
 
-// Selection timeout duration (30 seconds)
-const SELECTION_TIMEOUT = 30000;
+// State validation and consistency checks
+const generateStateHash = (): string => {
+  const stateData = {
+    active: chooserState.isActive,
+    specs: chooserState.spectators.map(p => p.id).sort(),
+    red: chooserState.redTeam.map(p => p.id).sort(),
+    blue: chooserState.blueTeam.map(p => p.id).sort(),
+    selections: Object.keys(chooserState.selections).sort()
+  };
+  return JSON.stringify(stateData);
+};
 
-// Last time waiting message was shown (to prevent spam)
-let lastWaitingMessageTime = 0;
-const WAITING_MESSAGE_COOLDOWN = 10000; // 10 seconds
+const validateStateConsistency = (): boolean => {
+  const currentHash = generateStateHash();
+  if (chooserState.validationHash && chooserState.validationHash !== currentHash) {
+    console.error(`[TEAM_CHOOSER] State corruption detected! Expected: ${chooserState.validationHash}, Got: ${currentHash}`);
+    return false;
+  }
+  chooserState.validationHash = currentHash;
+  return true;
+};
+
+// Enhanced spectator validation with real-time checks
+const getValidSpectators = (): PlayerAugmented[] => {
+  try {
+    const allPlayers = room.getPlayerList();
+    const validSpectators = allPlayers
+      .filter(p => p.team === 0) // Must be on spectator team
+      .map(p => toAug(p))
+      .filter(augP => {
+        // Triple validation for spectator eligibility
+        try {
+          const freshPlayer = room.getPlayer(augP.id);
+          if (!freshPlayer) return false; // Player left
+          if (freshPlayer.team !== 0) return false; // Not spectator anymore
+          if (augP.afk) return false; // Is AFK
+          
+          return true;
+        } catch (error) {
+          console.warn(`[getValidSpectators] Player ${augP.id} validation failed: ${error}`);
+          return false;
+        }
+      });
+    
+    return validSpectators;
+  } catch (error) {
+    console.error(`[getValidSpectators] Critical error: ${error}`);
+    return [];
+  }
+};
 
 // Helper functions
 const getRedPlayers = () => room.getPlayerList().filter(p => p.team === 1);
@@ -69,21 +126,46 @@ const getTeamMembers = () => {
 
 // Check if team selection should be triggered
 export const shouldTriggerSelection = (): boolean => {
+  // Don't trigger selection during team rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress - skipping trigger check`);
+    return false;
+  }
+  
   const spectators = getSpectators();
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
+  // Additional validation: ensure spectators are actually valid and online
+  const validSpectators = spectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      console.warn(`[shouldTriggerSelection] Player ${p.id} validation failed, removing from spectators`);
+      return false;
+    }
+  });
+  
   // If teams are balanced, require at least 2 spectators to avoid false triggers when someone joins/leaves temporarily
   const minSpectators = Math.abs(redCount - blueCount) === 0 ? 2 : 1;
   
-  // Need enough spectators, teams not full (max 6 per team), and teams should be reasonably balanced
-  return spectators.length >= minSpectators && 
+  // Need enough valid spectators, teams not full (max 6 per team), and teams should be reasonably balanced
+  return validSpectators.length >= minSpectators && 
          (redCount < 6 || blueCount < 6) && 
          Math.abs(redCount - blueCount) <= 2; // Allow up to 2 player difference
 };
 
-// Check if we should show the "waiting for ball out" message
-export const checkAndShowWaitingMessage = (): void => {
+// Debounced function to show waiting message
+const debouncedShowWaitingMessage = (): void => {
+  // Don't show waiting message during team rotation
+  if (getTeamRotationInProgress()) {
+    return;
+  }
+  
   // Don't show if selection is already active
   if (chooserState.isActive) return;
   
@@ -91,42 +173,109 @@ export const checkAndShowWaitingMessage = (): void => {
   const now = Date.now();
   if (now - lastWaitingMessageTime < WAITING_MESSAGE_COOLDOWN) return;
   
+  // Get current valid spectators (non-AFK)
+  const spectators = getSpectators();
+  const redCount = getRedPlayers().length;
+  const blueCount = getBluePlayers().length;
+  
+  // Additional validation: ensure spectators are actually valid and online
+  const validSpectators = spectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      console.warn(`[checkAndShowWaitingMessage] Player ${p.id} validation failed, removing from spectators`);
+      return false;
+    }
+  });
+  
+  // Update the trigger condition to use validated spectators
+  const minSpectators = Math.abs(redCount - blueCount) === 0 ? 2 : 1;
+  const shouldTrigger = validSpectators.length >= minSpectators && 
+                       (redCount < 6 || blueCount < 6) && 
+                       Math.abs(redCount - blueCount) <= 2;
+  
   // Only show if selection should be triggered but isn't active yet
-  if (shouldTriggerSelection()) {
-    const spectators = getSpectators();
-    const message = `🟡 Top dışarıya çıkınca oyuncu değişikliği yapılacak. (${spectators.length} izleyici bekleniyor)`;
+  if (shouldTrigger) {
+    const message = `🟡 Top dışarıya çıkınca oyuncu değişikliği yapılacak. (${validSpectators.length} izleyici bekleniyor)`;
     
     // Send to all players as a bold yellow announcement
     room.sendAnnouncement(message, undefined, 0xFFFF00, "bold", 1);
     lastWaitingMessageTime = now;
-    console.log(`[TEAM_CHOOSER] Waiting for ball out - ${spectators.length} spectators ready`);
+    console.log(`[TEAM_CHOOSER] Waiting for ball out - ${validSpectators.length} valid spectators ready`);
+  } else if (spectators.length > 0 && validSpectators.length === 0) {
+    // All spectators are AFK or invalid - log this situation
+    console.log(`[TEAM_CHOOSER] Found ${spectators.length} spectators but none are valid (likely AFK or left)`);
   }
+};
+
+// Check if we should show the "waiting for ball out" message (debounced)
+export const checkAndShowWaitingMessage = (): void => {
+  // Clear any existing timeout to debounce rapid calls
+  if (waitingMessageTimeout) {
+    clearTimeout(waitingMessageTimeout);
+  }
+  
+  // Set a new timeout to debounce the message
+  waitingMessageTimeout = setTimeout(() => {
+    debouncedShowWaitingMessage();
+    waitingMessageTimeout = null;
+  }, 1000); // 1 second debounce delay
 };
 
 // Check if teams are uneven and auto-balance by moving players to spectators
 export const checkAndAutoBalance = (): boolean => {
-  const redPlayers = getRedPlayers();
-  const bluePlayers = getBluePlayers();
-  const spectators = getSpectators();
-  
-  const redCount = redPlayers.length;
-  const blueCount = bluePlayers.length;
-  const specCount = spectators.length;
-  
-  console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Spectators: ${specCount}`);
-  
-  const teamDifference = Math.abs(redCount - blueCount);
-  
-  // Don't balance if teams are already equal
-  if (teamDifference === 0) {
-    console.log(`[AUTO_BALANCE] Teams are balanced - no action needed`);
+  // Don't auto-balance during team rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress - skipping auto-balance`);
     return false;
   }
   
-  // If there are spectators available, don't auto-balance (let team chooser handle it)
+  const redPlayers = getRedPlayers();
+  const bluePlayers = getBluePlayers();
+  const rawSpectators = getSpectators();
+  
+  // Validate spectators to exclude AFK/invalid ones
+  const validSpectators = rawSpectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      return false;
+    }
+  });
+  
+  const redCount = redPlayers.length;
+  const blueCount = bluePlayers.length;
+  const specCount = validSpectators.length; // Use validated spectators count
+  
+  // Only log when there's actually something to report or when counts have changed significantly
+  const teamDifference = Math.abs(redCount - blueCount);
+  
+  // Reduce console spam - only log when teams are significantly uneven or when there are valid spectators
+  if (teamDifference > 0 || specCount > 0) {
+    console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Valid Spectators: ${specCount}${rawSpectators.length !== specCount ? ` (${rawSpectators.length - specCount} AFK/invalid)` : ''}`);
+  }
+  
+  // Don't balance if teams are already equal
+  if (teamDifference === 0) {
+    // Only log if there was something to balance
+    if (specCount > 0) {
+      console.log(`[AUTO_BALANCE] Teams are balanced - no action needed`);
+    }
+    return false;
+  }
+  
+  // If there are valid spectators available, don't auto-balance (let team chooser handle it)
   // This function is for moving players FROM teams TO spectators, not the other way around
   if (specCount > 0) {
-    console.log(`[AUTO_BALANCE] Teams uneven but spectators available - let team chooser handle this`);
+    console.log(`[AUTO_BALANCE] Teams uneven but ${specCount} valid spectators available - let team chooser handle this`);
     return false; // Let the team chooser system handle it
   }
   
@@ -169,249 +318,290 @@ export const checkAndAutoBalance = (): boolean => {
   return false;
 };
 
-// Start the selection process
-export const startSelection = (): void => {
-  if (chooserState.isActive) return;
-  
-  const spectators = getSpectators();
-  if (spectators.length < 2) return;
-  
-  const { red, blue } = getTeamMembers();
-  if (red.length === 0 || blue.length === 0) return;
-  
-  // Pause the game
-  room.pauseGame(true);
-  
-  chooserState.isActive = true;
-  chooserState.availableSpectators = spectators.map(p => {
-    try {
-      return toAug(p);
-    } catch (error) {
-      console.warn(`[startSelection] Player ${p.id} not found in players array, skipping`);
-      return null;
-    }
-  }).filter(p => p !== null) as PlayerAugmented[];
-  
-  // Determine which teams can choose based on balance
-  const redCount = getRedPlayers().length;
-  const blueCount = getBluePlayers().length;
-  
-  if (redCount < blueCount) {
-    // Red team is disadvantaged, only they can choose until balanced
-    chooserState.waitingForRed = true;
-    chooserState.waitingForBlue = false;
-    lastFirstTeam = 1; // Red went first
-  } else if (blueCount < redCount) {
-    // Blue team is disadvantaged, only they can choose until balanced
-    chooserState.waitingForRed = false;
-    chooserState.waitingForBlue = true;
-    lastFirstTeam = 2; // Blue went first
-  } else {
-    // Teams are equal, both teams can choose simultaneously
-    chooserState.waitingForRed = true;
-    chooserState.waitingForBlue = true;
+// Enhanced team selection with atomic operations
+export const startSelection = async (): Promise<void> => {
+  if (chooserState.isActive) {
+    console.log(`[TEAM_CHOOSER] Selection already active, ignoring start request`);
+    return;
   }
+
+  // Don't start selection during team rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress - delaying selection start`);
+    return;
+  }
+
+  const release = await teamMutex.acquire("startSelection");
   
-  sendSpectatorList();
-  startSelectionTimeout();
+  try {
+    console.log(`[TEAM_CHOOSER] Starting atomic team selection process`);
+    chooserState.startTime = Date.now();
+    
+    // Get and validate current spectators before starting
+    const validSpectators = getValidSpectators();
+    
+    if (validSpectators.length === 0) {
+      console.log(`[TEAM_CHOOSER] No valid spectators available for selection`);
+      return;
+    }
+
+    // Validate team state before starting
+    const redPlayers = getRedPlayers();
+    const bluePlayers = getBluePlayers();
+    
+    console.log(`[TEAM_CHOOSER] Current state - Red: ${redPlayers.length}, Blue: ${bluePlayers.length}, Valid Spectators: ${validSpectators.length}`);
+
+    if (redPlayers.length >= 6 && bluePlayers.length >= 6) {
+      console.log(`[TEAM_CHOOSER] Both teams already full, no selection needed`);
+      return;
+    }
+
+    if (Math.abs(redPlayers.length - bluePlayers.length) > 3) {
+      console.log(`[TEAM_CHOOSER] Team imbalance too large (${redPlayers.length}v${bluePlayers.length}), manual intervention required`);
+      sendMessage(`⚠️ Takım dengesizliği çok büyük (${redPlayers.length}v${bluePlayers.length}). Manuel müdahale gerekli.`);
+      return;
+    }
+
+    // Pause game for selection
+    room.pauseGame(true);
+    
+    // Set state atomically
+    chooserState.isActive = true;
+    chooserState.spectators = validSpectators;
+    chooserState.redTeam = redPlayers.map(p => toAug(p));
+    chooserState.blueTeam = bluePlayers.map(p => toAug(p));
+    chooserState.selections = {};
+    chooserState.timeout = null;
+    chooserState.validationHash = generateStateHash();
+    
+    console.log(`[TEAM_CHOOSER] Starting selection with ${chooserState.spectators.length} valid spectators:`, 
+      chooserState.spectators.map(s => `${s.name}(${s.id})`));
+    
+    // Determine selection logic based on team balance
+    const redCount = redPlayers.length;
+    const blueCount = bluePlayers.length;
+    
+    if (redCount < blueCount) {
+      sendMessage("🔴 Kırmızı takım daha az oyuncuya sahip - sadece onlar seçim yapabilir");
+    } else if (blueCount < redCount) {
+      sendMessage("🔵 Mavi takım daha az oyuncuya sahip - sadece onlar seçim yapabilir");
+    } else {
+      // Teams equal - alternate or both choose
+      if (validSpectators.length === 1) {
+        // Only one spectator - use alternating system
+        const choosingTeam = lastFirstTeam === 1 ? 2 : 1;
+        const teamName = choosingTeam === 1 ? "Kırmızı" : "Mavi";
+        sendMessage(`⚖️ Takımlar eşit - ${teamName} takımının seçim sırası`);
+        lastFirstTeam = choosingTeam;
+      } else {
+        sendMessage("⚖️ Takımlar eşit - her iki takım da seçim yapabilir");
+      }
+    }
+    
+    sendSpectatorList(true); // Immediate initial list
+    startSelectionTimeout();
+    
+    console.log(`[TEAM_CHOOSER] Selection started successfully`);
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error starting selection: ${error}`);
+    // Cleanup on error
+    chooserState.isActive = false;
+    chooserState.spectators = [];
+    chooserState.redTeam = [];
+    chooserState.blueTeam = [];
+    chooserState.selections = {};
+    if (chooserState.timeout) {
+      clearTimeout(chooserState.timeout);
+      chooserState.timeout = null;
+    }
+    room.pauseGame(false);
+  } finally {
+    release();
+  }
 };
 
-// Send numbered spectator list to captains
-const sendSpectatorList = (): void => {
-  if (!chooserState.isActive) return;
-  
-  let message = "🔄 Oyuncu Seçimi:\n";
-  chooserState.availableSpectators.forEach((spec, index) => {
-    message += `${index + 1}. ${spec.name} [Lvl.${spec.level}]\n`;
-  });
-  
-  const { red, blue } = getTeamMembers();
-  const spectators = getSpectators().map(p => {
-    try {
-      return toAug(p);
-    } catch (error) {
-      console.warn(`[sendSpectatorList] Player ${p.id} not found in players array, skipping`);
-      return null;
-    }
-  }).filter(p => p !== null) as PlayerAugmented[];
-  
-  // Send to red team if they can choose
-  if (chooserState.waitingForRed) {
-    const redMessage = message + `\nKırmızı takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
-    red.forEach(member => {
-      room.sendAnnouncement(redMessage, member.id, 0xFF0000, "bold", 2); // Red color
-    });
-  }
-  
-  // Send to blue team if they can choose
-  if (chooserState.waitingForBlue) {
-    const blueMessage = message + `\nMavi takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.availableSpectators.length})`;
-    blue.forEach(member => {
-      room.sendAnnouncement(blueMessage, member.id, 0x0000FF, "bold", 2); // Blue color
-    });
-  }
-  
-  // Send info to spectators
-  const activeTeams = [];
-  if (chooserState.waitingForRed) activeTeams.push("Kırmızı");
-  if (chooserState.waitingForBlue) activeTeams.push("Mavi");
-  const infoMessage = `⏸️ Oyun durduruldu. ${activeTeams.join(" ve ")} takım${activeTeams.length > 1 ? 'ları' : 'ı'} oyuncu seçiyor...`;
-  
-  spectators.forEach(player => {
-    sendMessage(infoMessage, player);
-  });
-};
-
-// Handle selection command
-export const handleSelection = (player: PlayerAugmented, selection: string): boolean => {
+// Enhanced spectator selection with deadlock prevention
+export const handleSpectatorSelection = async (player: PlayerAugmented, selection: string): Promise<boolean> => {
   if (!chooserState.isActive) {
-    console.log(`[TEAM_CHOOSER] Selection not active, ignoring input: ${selection} from ${player.name}`);
     return false;
   }
-  
-  console.log(`[TEAM_CHOOSER] Handling selection: ${selection} from ${player.name} (ID: ${player.id})`);
-  console.log(`[TEAM_CHOOSER] State: waitingForRed=${chooserState.waitingForRed}, waitingForBlue=${chooserState.waitingForBlue}`);
-  
-  // Check if this player is in the current selecting team
-  const { red, blue } = getTeamMembers();
-  console.log(`[TEAM_CHOOSER] Red team:`, red.map(p => `${p.name}(${p.id})`));
-  console.log(`[TEAM_CHOOSER] Blue team:`, blue.map(p => `${p.name}(${p.id})`));
-  
-  const playerIsInRed = red.some(p => p.id === player.id);
-  const playerIsInBlue = blue.some(p => p.id === player.id);
-  
-  // Check current team counts to prevent uneven teams
-  const currentRedCount = red.length;
-  const currentBlueCount = blue.length;
-  
-  // Additional safeguard: Don't allow a team to choose if it would create a 2+ player difference
-  if (playerIsInRed && currentRedCount > currentBlueCount) {
-    sendMessage("❌ Kırmızı takım şu anda seçim yapamaz. Takımlar dengelenmelidir.", player);
-    console.log(`[TEAM_CHOOSER] Blocked red selection - would create uneven teams (${currentRedCount+1}v${currentBlueCount})`);
+
+  // Validate state consistency before processing
+  if (!validateStateConsistency()) {
+    console.error(`[TEAM_CHOOSER] State corruption detected, ending selection`);
+    // Use direct call to avoid deadlock
+    setImmediate(() => endSelection());
     return true;
   }
+
+  const release = await teamMutex.acquire(`spectatorSelection-${player.id}`);
   
-  if (playerIsInBlue && currentBlueCount > currentRedCount) {
-    sendMessage("❌ Mavi takım şu anda seçim yapamaz. Takımlar dengelenmelidir.", player);
-    console.log(`[TEAM_CHOOSER] Blocked blue selection - would create uneven teams (${currentRedCount}v${currentBlueCount+1})`);
-    return true;
-  }
-  
-  // Check if this player's team is allowed to select
-  const isRedTeamMember = chooserState.waitingForRed && playerIsInRed;
-  const isBlueTeamMember = chooserState.waitingForBlue && playerIsInBlue;
-  
-  console.log(`[TEAM_CHOOSER] Player ${player.name} - In Red: ${playerIsInRed}, In Blue: ${playerIsInBlue}`);
-  console.log(`[TEAM_CHOOSER] Can select - Red allowed: ${isRedTeamMember}, Blue allowed: ${isBlueTeamMember}`);
-  
-  if (!isRedTeamMember && !isBlueTeamMember) {
-    if (playerIsInRed && !chooserState.waitingForRed) {
-      sendMessage("❌ Kırmızı takım şu anda seçim yapamaz. Mavi takım daha az oyuncuya sahip.", player);
-    } else if (playerIsInBlue && !chooserState.waitingForBlue) {
-      sendMessage("❌ Mavi takım şu anda seçim yapamaz. Kırmızı takım daha az oyuncuya sahip.", player);
-    } else {
-      sendMessage("❌ Şu anda sizin takımınızın seçim sırası değil.", player);
-    }
-    return true; // Consume the message
-  }
-  
-  // Parse selection number
-  const selectionNum = parseInt(selection.trim());
-  console.log(`[TEAM_CHOOSER] Parsed selection number: ${selectionNum}, available spectators: ${chooserState.availableSpectators.length}`);
-  
-  if (isNaN(selectionNum) || selectionNum < 1 || selectionNum > chooserState.availableSpectators.length) {
-    console.log(`[TEAM_CHOOSER] Invalid selection number`);
-    sendMessage(`❌ Geçersiz seçim. 1-${chooserState.availableSpectators.length} arası sayı girin.`, player);
-    return true;
-  }
-  
-  // Get selected player
-  const selectedPlayer = chooserState.availableSpectators[selectionNum - 1];
-  const selectedPlayerObj = room.getPlayer(selectedPlayer.id);
-  
-  console.log(`[TEAM_CHOOSER] Selected player: ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
-  
-  if (!selectedPlayerObj) {
-    console.log(`[TEAM_CHOOSER] Selected player not found in room`);
-    sendMessage("❌ Seçilen oyuncu artık odada değil.", player);
-    updateSpectatorList();
-    return true;
-  }
-  
-  // Determine which team the selecting player belongs to
-  const selectingPlayerTeam = red.find(p => p.id === player.id) ? 1 : 2;
-  const targetTeam = selectingPlayerTeam;
-  const teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
-  
-  console.log(`[TEAM_CHOOSER] Player ${player.name} is in team ${selectingPlayerTeam}, assigning ${selectedPlayer.name} to team ${targetTeam} (${teamName})`);
-  room.setPlayerTeam(selectedPlayer.id, targetTeam);
-  
-  // Announce selection
-  sendMessage(`🎯 ${teamName} takımından ${player.name}, ${selectedPlayer.name} oyuncusunu seçti!`, null);
-  
-  // Remove from available spectators
-  chooserState.availableSpectators = chooserState.availableSpectators.filter(p => p.id !== selectedPlayer.id);
-  
-  // Clear timeout
-  if (chooserState.selectionTimeout) {
-    clearTimeout(chooserState.selectionTimeout);
-    chooserState.selectionTimeout = null;
-  }
-  
-  // Calculate new team counts manually (more reliable than getRedPlayers/getBluePlayers)
-  const currentRed = getRedPlayers();
-  const currentBlue = getBluePlayers();
-  
-  // Add the newly assigned player to the count
-  const newRedCount = targetTeam === 1 ? currentRed.length + 1 : currentRed.length;
-  const newBlueCount = targetTeam === 2 ? currentBlue.length + 1 : currentBlue.length;
-  
-  console.log(`[TEAM_CHOOSER] Manual count calculation - Red: ${newRedCount}, Blue: ${newBlueCount}`);
-  
-  // Check if we should continue or end selection based on new counts
-  const specCount = chooserState.availableSpectators.length;
-  const shouldContinue = specCount > 0 && 
-         (newRedCount < 6 && newBlueCount < 6) && 
-         Math.abs(newRedCount - newBlueCount) <= 1;
-         
-  console.log(`[TEAM_CHOOSER] Should continue with manual calculation: ${shouldContinue}`);
-  
-  if (shouldContinue) {
-    // Determine who should choose next based on team balance
+  try {
+    console.log(`[TEAM_CHOOSER] Processing selection: ${selection} from ${player.name} (ID: ${player.id})`);
     
-    console.log(`[TEAM_CHOOSER] After selection - Red: ${newRedCount}, Blue: ${newBlueCount}`);
-    
-    if (newRedCount < newBlueCount) {
-      // Red team is disadvantaged, only they can choose until balanced
-      chooserState.waitingForRed = true;
-      chooserState.waitingForBlue = false;
-      console.log(`[TEAM_CHOOSER] Red team disadvantaged (${newRedCount}v${newBlueCount}), only red can choose`);
-    } else if (newBlueCount < newRedCount) {
-      // Blue team is disadvantaged, only they can choose until balanced
-      chooserState.waitingForRed = false;
-      chooserState.waitingForBlue = true;
-      console.log(`[TEAM_CHOOSER] Blue team disadvantaged (${newRedCount}v${newBlueCount}), only blue can choose`);
-    } else {
-      // Teams are equal, both can choose simultaneously
-      chooserState.waitingForRed = true;
-      chooserState.waitingForBlue = true;
-      console.log(`[TEAM_CHOOSER] Teams equal (${newRedCount}v${newBlueCount}), both can choose`);
+    // Validate player still exists and is on correct team
+    const freshPlayer = room.getPlayer(player.id);
+    if (!freshPlayer) {
+      console.warn(`[TEAM_CHOOSER] Player ${player.id} no longer exists`);
+      return true;
     }
     
-    sendSpectatorList();
-    startSelectionTimeout();
-  } else {
-    endSelection();
+    // Check team membership
+    const playerIsInRed = freshPlayer.team === 1;
+    const playerIsInBlue = freshPlayer.team === 2;
+    
+    if (!playerIsInRed && !playerIsInBlue) {
+      sendMessage("❌ Sadece takım oyuncuları seçim yapabilir.", player);
+      return true;
+    }
+    
+    // Quick validation of spectator list consistency
+    if (chooserState.spectators.length === 0) {
+      console.log(`[TEAM_CHOOSER] No spectators available for selection by ${player.name}`);
+      sendMessage("❌ Seçilebilecek oyuncu kalmadı.", player);
+      return true;
+    }
+    
+    // Determine team eligibility
+    const redCount = chooserState.redTeam.length;
+    const blueCount = chooserState.blueTeam.length;
+    
+    let canRedChoose = false;
+    let canBlueChoose = false;
+    
+    if (redCount < blueCount) {
+      canRedChoose = true;
+    } else if (blueCount < redCount) {
+      canBlueChoose = true;
+    } else {
+      // Teams equal
+      if (chooserState.spectators.length === 1) {
+        // Single spectator - use alternating
+        canRedChoose = lastFirstTeam === 1;
+        canBlueChoose = lastFirstTeam === 2;
+      } else {
+        // Multiple spectators - both can choose
+        canRedChoose = true;
+        canBlueChoose = true;
+      }
+    }
+    
+    // Check if this player's team can select
+    if ((playerIsInRed && !canRedChoose) || (playerIsInBlue && !canBlueChoose)) {
+      const reason = redCount < blueCount ? "Mavi takım daha az oyuncuya sahip" :
+                   blueCount < redCount ? "Kırmızı takım daha az oyuncuya sahip" :
+                   "Şu anda sizin takımınızın seçim sırası değil";
+      sendMessage(`❌ ${reason}.`, player);
+      return true;
+    }
+    
+    // Parse and validate selection
+    const selectionNum = parseInt(selection.trim());
+    if (isNaN(selectionNum) || selectionNum < 1 || selectionNum > chooserState.spectators.length) {
+      sendMessage(`❌ Geçersiz seçim. 1-${chooserState.spectators.length} arası sayı girin.`, player);
+      return true;
+    }
+    
+    // Get selected player and validate
+    const selectedPlayer = chooserState.spectators[selectionNum - 1];
+    const selectedPlayerObj = room.getPlayer(selectedPlayer.id);
+    
+    console.log(`[TEAM_CHOOSER] Selection validation - Player: ${selectedPlayer.name} (ID: ${selectedPlayer.id}), Found: ${!!selectedPlayerObj}, Team: ${selectedPlayerObj?.team}`);
+    
+    if (!selectedPlayerObj || selectedPlayerObj.team !== 0) {
+      sendMessage("❌ Seçilen oyuncu artık mevcut değil.", player);
+      console.log(`[TEAM_CHOOSER] Player no longer available, updating spectator list`);
+      updateSpectatorListNonBlocking();
+      sendSpectatorList(true); // Immediate update after validation failure
+      return true;
+    }
+    
+    // Check for duplicate selection
+    if (chooserState.selections[selectedPlayer.id]) {
+      sendMessage("❌ Bu oyuncu zaten seçildi.", player);
+      console.log(`[TEAM_CHOOSER] Duplicate selection detected for player ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
+      return true;
+    }
+    
+    // Double-check that player is still in spectators (additional safety check)
+    const currentValidSpectators = getValidSpectators();
+    const isStillSpectator = currentValidSpectators.some(spec => spec.id === selectedPlayer.id);
+    if (!isStillSpectator) {
+      sendMessage("❌ Seçilen oyuncu artık izleyici değil.", player);
+      console.log(`[TEAM_CHOOSER] Player ${selectedPlayer.name} (ID: ${selectedPlayer.id}) is no longer a valid spectator`);
+      updateSpectatorListNonBlocking();
+      sendSpectatorList(true); // Immediate update after validation failure
+      return true;
+    }
+    
+    // Perform direct team assignment to avoid nested mutex
+    const targetTeam = playerIsInRed ? 1 : 2;
+    const teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
+    
+    const success = setPlayerTeamDirect(selectedPlayer.id, targetTeam, `team-selection-by-${player.name}`);
+    if (!success) {
+      sendMessage("❌ Oyuncu atanamadı. Tekrar deneyin.", player);
+      return true;
+    }
+    
+    // Update state
+    chooserState.selections[selectedPlayer.id] = targetTeam;
+    const previousSpectatorCount = chooserState.spectators.length;
+    chooserState.spectators = chooserState.spectators.filter(p => p.id !== selectedPlayer.id);
+    
+    console.log(`[TEAM_CHOOSER] Updated spectator list - Previous: ${previousSpectatorCount}, Current: ${chooserState.spectators.length}, Removed: ${selectedPlayer.name} (ID: ${selectedPlayer.id})`);
+    
+    // Update validation hash
+    chooserState.validationHash = generateStateHash();
+    
+    // Announce selection
+    sendMessage(`🎯 ${teamName} takımından ${player.name}, ${selectedPlayer.name} oyuncusunu seçti!`);
+    
+    // Clear timeout and check if selection should continue
+    if (chooserState.timeout) {
+      clearTimeout(chooserState.timeout);
+      chooserState.timeout = null;
+    }
+    
+    // Update team counts
+    const newRedCount = getRedPlayers().length;
+    const newBlueCount = getBluePlayers().length;
+    
+    // Check continuation
+    const specCount = chooserState.spectators.length;
+    const shouldContinue = specCount > 0 && 
+                          (newRedCount < 6 && newBlueCount < 6) && 
+                          Math.abs(newRedCount - newBlueCount) <= 1;
+    
+    if (shouldContinue) {
+      // Update team references
+      chooserState.redTeam = getRedPlayers().map(p => toAug(p));
+      chooserState.blueTeam = getBluePlayers().map(p => toAug(p));
+      
+      sendSpectatorList(true); // Immediate update after selection
+      startSelectionTimeout();
+    } else {
+      // Schedule endSelection to run after this mutex is released
+      setImmediate(() => endSelection());
+    }
+    
+    return true;
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error in spectator selection: ${error}`);
+    sendMessage("❌ Seçim işleminde hata oluştu.", player);
+    return true;
+  } finally {
+    release();
   }
-  
-  return true;
 };
 
 // Check if selection should continue
 const checkContinueSelection = (): boolean => {
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
-  const specCount = chooserState.availableSpectators.length;
+  const specCount = chooserState.spectators.length;
   
   console.log(`[TEAM_CHOOSER] checkContinueSelection - Red: ${redCount}, Blue: ${blueCount}, Specs: ${specCount}`);
   
@@ -427,112 +617,389 @@ const checkContinueSelection = (): boolean => {
   return shouldContinue;
 };
 
-// Update spectator list (remove players who left)
-const updateSpectatorList = (): void => {
+// Send numbered spectator list to captains (internal function)
+const debouncedSendSpectatorList = (): void => {
   if (!chooserState.isActive) return;
   
-  const currentSpectators = getSpectators().map(p => {
-    try {
-      return toAug(p);
-    } catch (error) {
-      console.warn(`[updateSpectatorList] Player ${p.id} not found in players array, skipping`);
-      return null;
-    }
-  }).filter(p => p !== null) as PlayerAugmented[];
-  chooserState.availableSpectators = chooserState.availableSpectators.filter(spec => 
-    currentSpectators.some(current => current.id === spec.id)
-  );
+  console.log(`[TEAM_CHOOSER] Sending updated spectator list with ${chooserState.spectators.length} players`);
   
-  if (chooserState.availableSpectators.length === 0) {
-    endSelection();
+  let message = "🔄 Oyuncu Seçimi:\n";
+  chooserState.spectators.forEach((spec, index) => {
+    message += `${index + 1}. ${spec.name} [Lvl.${spec.level}]\n`;
+    console.log(`[TEAM_CHOOSER] List entry: ${index + 1}. ${spec.name} (ID: ${spec.id})`);
+  });
+  
+  const redPlayers = getRedPlayers();
+  const bluePlayers = getBluePlayers();
+  const spectators = getValidSpectators();
+  
+  // Determine selection eligibility
+  const redCount = redPlayers.length;
+  const blueCount = bluePlayers.length;
+  
+  let canRedChoose = false;
+  let canBlueChoose = false;
+  
+  if (redCount < blueCount) {
+    canRedChoose = true;
+  } else if (blueCount < redCount) {
+    canBlueChoose = true;
+  } else {
+    // Teams equal
+    if (chooserState.spectators.length === 1) {
+      // Single spectator - use alternating
+      canRedChoose = lastFirstTeam === 1;
+      canBlueChoose = lastFirstTeam === 2;
+    } else {
+      // Multiple spectators - both can choose
+      canRedChoose = true;
+      canBlueChoose = true;
+    }
   }
+  
+  // Send to red team if they can choose
+  if (canRedChoose) {
+    const redMessage = message + `\n🔴 Kırmızı takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.spectators.length})`;
+    redPlayers.forEach(member => {
+      room.sendAnnouncement(redMessage, member.id, 0xFF0000, "bold", 2);
+    });
+  }
+  
+  // Send to blue team if they can choose
+  if (canBlueChoose) {
+    const blueMessage = message + `\n🔵 Mavi takım üyeleri, oyuncu seçmek için sayı yazın (1-${chooserState.spectators.length})`;
+    bluePlayers.forEach(member => {
+      room.sendAnnouncement(blueMessage, member.id, 0x0000FF, "bold", 2);
+    });
+  }
+  
+  // Send info to spectators
+  const activeTeams = [];
+  if (canRedChoose) activeTeams.push("Kırmızı");
+  if (canBlueChoose) activeTeams.push("Mavi");
+  const infoMessage = `⏸️ Oyun durduruldu. ${activeTeams.join(" ve ")} takım${activeTeams.length > 1 ? 'ları' : 'ı'} oyuncu seçiyor...`;
+  
+  spectators.forEach(player => {
+    sendMessage(infoMessage, player);
+  });
 };
 
-// Start selection timeout
-const startSelectionTimeout = (): void => {
-  if (chooserState.selectionTimeout) {
-    clearTimeout(chooserState.selectionTimeout);
+// Send numbered spectator list to captains (debounced)
+const sendSpectatorList = (immediate: boolean = false): void => {
+  // For immediate updates (after successful selections), bypass debouncing
+  if (immediate) {
+    console.log(`[TEAM_CHOOSER] Sending immediate spectator list update`);
+    debouncedSendSpectatorList();
+    return;
   }
   
-  chooserState.selectionTimeout = setTimeout(() => {
+  // Clear any existing timeout to debounce rapid calls
+  if (spectatorListTimeout) {
+    clearTimeout(spectatorListTimeout);
+  }
+  
+  // Set a new timeout to debounce the spectator list sending
+  spectatorListTimeout = setTimeout(() => {
+    debouncedSendSpectatorList();
+    spectatorListTimeout = null;
+  }, 200); // Reduced to 200ms debounce delay for faster updates
+};
+
+// Enhanced team selection timeout with deadlock prevention
+const startSelectionTimeout = (): void => {
+  if (chooserState.timeout) {
+    clearTimeout(chooserState.timeout);
+  }
+  
+  chooserState.timeout = setTimeout(async () => {
     if (chooserState.isActive) {
-      const teamName = chooserState.waitingForRed ? "Kırmızı" : "Mavi";
+      console.log(`[TEAM_CHOOSER] Selection timeout triggered`);
       
-      sendMessage(`⏰ ${teamName} takımının seçim süresi doldu. Otomatik oyuncu atanıyor...`, null);
+      // Determine which team should get auto-assignment
+      const redCount = getRedPlayers().length;
+      const blueCount = getBluePlayers().length;
       
-      // Auto-assign first available spectator
-      if (chooserState.availableSpectators.length > 0) {
-        const autoSelected = chooserState.availableSpectators[0];
-        const targetTeam = chooserState.waitingForRed ? 1 : 2;
-        
-        room.setPlayerTeam(autoSelected.id, targetTeam);
-        sendMessage(`🤖 ${autoSelected.name} otomatik olarak ${teamName} takımına atandı.`, null);
-        
-        chooserState.availableSpectators.shift(); // Remove first player
+      let targetTeam = 1; // Default to red
+      let teamName = "Kırmızı";
+      
+      if (redCount < blueCount) {
+        targetTeam = 1;
+        teamName = "Kırmızı";
+      } else if (blueCount < redCount) {
+        targetTeam = 2;
+        teamName = "Mavi";
+      } else {
+        // Teams equal - use alternating
+        targetTeam = lastFirstTeam === 1 ? 1 : 2;
+        teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
       }
       
-      endSelection();
+      sendMessage(`⏰ ${teamName} takımının seçim süresi doldu. Otomatik oyuncu atanıyor...`);
+      
+      // Auto-assign first available spectator using direct assignment
+      if (chooserState.spectators.length > 0) {
+        const autoSelected = chooserState.spectators[0];
+        
+        const success = setPlayerTeamDirect(autoSelected.id, targetTeam, "timeout-auto-assignment");
+        
+        if (success) {
+          sendMessage(`🤖 ${autoSelected.name} otomatik olarak ${teamName} takımına atandı.`);
+          chooserState.spectators.shift(); // Remove assigned player
+          
+          // Check if selection should continue
+          const newRedCount = getRedPlayers().length;
+          const newBlueCount = getBluePlayers().length;
+          const specCount = chooserState.spectators.length;
+          
+          const shouldContinue = specCount > 0 && 
+                                (newRedCount < 6 && newBlueCount < 6) && 
+                                Math.abs(newRedCount - newBlueCount) <= 1;
+          
+          if (shouldContinue) {
+            sendSpectatorList(true); // Immediate update after auto-assignment
+            startSelectionTimeout();
+          } else {
+            endSelection();
+          }
+        } else {
+          console.error(`[TEAM_CHOOSER] Failed to auto-assign player during timeout`);
+          endSelection();
+        }
+      } else {
+        endSelection();
+      }
     }
   }, SELECTION_TIMEOUT);
 };
 
-// End selection process
-export const endSelection = (): void => {
+// End selection with comprehensive cleanup
+export const endSelection = async (): Promise<void> => {
   if (!chooserState.isActive) return;
   
-  // Clear timeout
-  if (chooserState.selectionTimeout) {
-    clearTimeout(chooserState.selectionTimeout);
-    chooserState.selectionTimeout = null;
+  const release = await teamMutex.acquire("endSelection");
+  
+  try {
+    console.log(`[TEAM_CHOOSER] Ending selection process`);
+    
+    // Clear timeout
+    if (chooserState.timeout) {
+      clearTimeout(chooserState.timeout);
+      chooserState.timeout = null;
+    }
+    
+    // Reset state atomically
+    chooserState.isActive = false;
+    chooserState.redTeam = [];
+    chooserState.blueTeam = [];
+    chooserState.spectators = [];
+    chooserState.selections = {};
+    chooserState.startTime = null;
+    chooserState.validationHash = null;
+    
+    // Resume game
+    room.pauseGame(false);
+    
+    // Final team counts
+    const finalRed = getRedPlayers().length;
+    const finalBlue = getBluePlayers().length;
+    
+    sendMessage(`✅ Oyuncu seçimi tamamlandı! Kırmızı: ${finalRed}, Mavi: ${finalBlue}`);
+    console.log(`[TEAM_CHOOSER] Selection ended - Final teams Red: ${finalRed}, Blue: ${finalBlue}`);
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error ending selection: ${error}`);
+    
+    // Force cleanup on error
+    chooserState.isActive = false;
+    chooserState.redTeam = [];
+    chooserState.blueTeam = [];
+    chooserState.spectators = [];
+    chooserState.selections = {};
+    chooserState.startTime = null;
+    chooserState.validationHash = null;
+    
+    if (chooserState.timeout) {
+      clearTimeout(chooserState.timeout);
+      chooserState.timeout = null;
+    }
+    
+    room.pauseGame(false);
+  } finally {
+    release();
   }
-  
-  // Reset state
-  chooserState.isActive = false;
-  chooserState.waitingForRed = false;
-  chooserState.waitingForBlue = false;
-  chooserState.availableSpectators = [];
-  
-  // Resume game
-  room.pauseGame(false);
-  
-  sendMessage("▶️ Oyuncu seçimi tamamlandı. Oyun devam ediyor!", null);
-  
-  // Check if we should show waiting message for next selection
-  setTimeout(() => {
-    checkAndShowWaitingMessage();
-  }, 1000); // Delay to let the game resume properly
 };
 
-// Force end selection (for admin commands or game events)
-export const forceEndSelection = (): void => {
-  if (chooserState.isActive) {
-    endSelection();
+// Non-blocking spectator list update to avoid deadlocks
+const updateSpectatorListNonBlocking = (): void => {
+  try {
+    const currentSpectators = getValidSpectators();
+    
+    // Remove spectators who are no longer valid
+    chooserState.spectators = chooserState.spectators.filter(spec => 
+      currentSpectators.some(current => current.id === spec.id)
+    );
+    
+    // Update validation hash
+    chooserState.validationHash = generateStateHash();
+    
+    if (chooserState.spectators.length === 0) {
+      console.log(`[TEAM_CHOOSER] No spectators remaining, scheduling end selection`);
+      // Schedule endSelection to avoid deadlock
+      setImmediate(() => endSelection());
+    }
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error updating spectator list: ${error}`);
   }
 };
 
-// Check if selection is currently active
+// Export the main selection handler for use in index.ts
+export const handleSelection = handleSpectatorSelection;
+
+// Enhanced player leave handling with deadlock prevention
+export const handlePlayerLeave = async (player: PlayerAugmented): Promise<void> => {
+  try {
+    // Don't handle during team rotation
+    if (getTeamRotationInProgress()) {
+      return;
+    }
+    
+    if (!chooserState.isActive) {
+      return;
+    }
+    
+    const release = await teamMutex.acquire(`playerLeave-${player.id}`);
+    
+    try {
+      // Remove from any ongoing selections
+      delete chooserState.selections[player.id];
+      
+      // If a spectator leaves, update list
+      const wasSpectator = chooserState.spectators.some(spec => spec.id === player.id);
+      if (wasSpectator) {
+        updateSpectatorListNonBlocking();
+        if (chooserState.spectators.length > 0) {
+          sendSpectatorList(true); // Immediate update after player leave
+        }
+      }
+      
+      // If a team player leaves, update team references
+      chooserState.redTeam = chooserState.redTeam.filter(p => p.id !== player.id);
+      chooserState.blueTeam = chooserState.blueTeam.filter(p => p.id !== player.id);
+      
+      // Update validation hash
+      chooserState.validationHash = generateStateHash();
+      
+    } finally {
+      release();
+    }
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error handling player leave: ${error}`);
+  }
+};
+
+// Force end selection for admin commands
+export const forceEndSelection = async (): Promise<void> => {
+  console.log(`[TEAM_CHOOSER] Force ending selection`);
+  await endSelection();
+};
+
+// Check if selection is active
 export const isSelectionActive = (): boolean => {
   return chooserState.isActive;
 };
 
-// Handle player leaving during selection
-export const handlePlayerLeave = (player: PlayerAugmented): void => {
-  if (!chooserState.isActive) return;
+// Clean up stale spectator data to prevent false triggers and console spam
+export const cleanupStaleSpectators = (): void => {
+  // Only run if we're not in an active selection
+  if (chooserState.isActive) return;
   
-  // If all members of a team leave, end selection
-  const { red, blue } = getTeamMembers();
-  if (red.length === 0 || blue.length === 0) {
-    sendMessage("❌ Bir takımın tüm üyeleri oyundan ayrıldı. Seçim iptal ediliyor.", null);
-    endSelection();
-    return;
-  }
-  
-  // If a spectator leaves, update list
-  const wasSpectator = chooserState.availableSpectators.some(spec => spec.id === player.id);
-  if (wasSpectator) {
-    updateSpectatorList();
-    if (chooserState.availableSpectators.length > 0) {
-      sendSpectatorList(); // Refresh the list for team members
+  try {
+    const currentSpectators = getValidSpectators();
+    let removedCount = 0;
+    
+    // Get initial count
+    const initialCount = currentSpectators.length;
+    
+    // Validate each spectator and filter out invalid ones
+    const validSpectators = currentSpectators.filter(p => {
+      try {
+        const playerObj = room.getPlayer(p.id);
+        if (!playerObj) {
+          removedCount++;
+          return false; // Player left
+        }
+        
+        const augPlayer = toAug(playerObj);
+        if (augPlayer.afk || playerObj.team !== 0) {
+          removedCount++;
+          return false; // Player is AFK or changed teams
+        }
+        
+        return true;
+      } catch (error) {
+        removedCount++;
+        return false;
+      }
+    });
+    
+    if (removedCount > 0) {
+      console.log(`[TEAM_CHOOSER] Cleaned up ${removedCount} stale spectators. Valid spectators remaining: ${validSpectators.length}`);
     }
+    
+    // Actually update the global spectator cache if this was called during non-selection periods
+    // This helps keep the spectator list accurate for future team chooser triggers
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error in spectator cleanup: ${error}`);
   }
 };
+
+// Enhanced periodic cleanup that actually maintains state consistency
+const performPeriodicCleanup = (): void => {
+  try {
+    // Clean up stale spectators
+    cleanupStaleSpectators();
+    
+    // If there's no active selection, we can do more aggressive cleanup
+    if (!chooserState.isActive) {
+      // Reset any stale state that might be lingering
+      if (chooserState.spectators.length > 0) {
+        console.log(`[TEAM_CHOOSER] Clearing ${chooserState.spectators.length} stale spectators from inactive chooser state`);
+        chooserState.spectators = [];
+        chooserState.redTeam = [];
+        chooserState.blueTeam = [];
+        chooserState.selections = {};
+        chooserState.validationHash = null;
+      }
+      
+      // Clear any orphaned timeout
+      if (chooserState.timeout) {
+        console.log(`[TEAM_CHOOSER] Clearing orphaned selection timeout`);
+        clearTimeout(chooserState.timeout);
+        chooserState.timeout = null;
+      }
+    }
+    
+    // Additional memory cleanup for team chooser state
+    const currentPlayerIds = new Set(room.getPlayerList().map(p => p.id));
+    
+    // Clean up selections for players who left
+    let selectionsCleaned = 0;
+    for (const playerId in chooserState.selections) {
+      if (!currentPlayerIds.has(parseInt(playerId))) {
+        delete chooserState.selections[playerId];
+        selectionsCleaned++;
+      }
+    }
+    
+    if (selectionsCleaned > 0) {
+      console.log(`[TEAM_CHOOSER] Cleaned up ${selectionsCleaned} stale player selections`);
+    }
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error in periodic cleanup: ${error}`);
+  }
+};
+
+// Auto-cleanup every 30 seconds to prevent stale data buildup
+setInterval(performPeriodicCleanup, 30000);

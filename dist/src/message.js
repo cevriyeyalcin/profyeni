@@ -22,7 +22,11 @@ const extractRealUsername = (formattedName) => {
     const match = formattedName.match(/^\[#\d+\]\s*(.+)$/);
     return match ? match[1] : formattedName;
 };
-const percentage = (elo) => 1 / (1 + Math.E ** -((elo - 1200) / 100));
+const levelPercentage = (level) => {
+    // Convert level to a percentage for color blending (levels 1-50+ range)
+    // Level 1 = 0%, Level 25 = 50%, Level 50+ = 100%
+    return Math.min(1, (level - 1) / 49);
+};
 const sendMessage = (msg, p) => {
     if (p) {
         index_1.room.sendAnnouncement(`[PS] ${msg}`, p.id, 0xd6cedb, "small", 2);
@@ -117,7 +121,7 @@ const playerMessage = (p, msg) => __awaiter(void 0, void 0, void 0, function* ()
         if (violationType) {
             const adminPlayers = index_1.room.getPlayerList().filter(player => player.admin);
             adminPlayers.forEach(admin => {
-                index_1.room.sendAnnouncement(`[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg} ${adminSuffix}`, admin.id, 0xFF6B6B, // Red color for violation warning
+                index_1.room.sendAnnouncement(`[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg} ${adminSuffix}`, admin.id, 0xFF6B6B, // Red color for violation warning
                 "normal", 1);
             });
             // Send specific warning to the user
@@ -134,7 +138,7 @@ const playerMessage = (p, msg) => __awaiter(void 0, void 0, void 0, function* ()
         chatColor = parseInt(vipColor, 16); // Use VIP custom color - eski çalışan sürüm
     }
     else {
-        chatColor = (0, utils_1.blendColorsInt)(0x636363, 0xfff7f2, percentage(p.elo) * 100); // Default ELO-based color
+        chatColor = (0, utils_1.blendColorsInt)(0x636363, 0xfff7f2, levelPercentage(p.level) * 100); // Default level-based color
     }
     // Determine text style - VIP users can have custom styles, others default to "normal"
     let textStyle = "normal";
@@ -145,12 +149,12 @@ const playerMessage = (p, msg) => __awaiter(void 0, void 0, void 0, function* ()
     if ((0, command_1.isGlobalMuteActive)()) {
         const adminPlayers = index_1.room.getPlayerList().filter(player => player.admin);
         adminPlayers.forEach(admin => {
-            index_1.room.sendAnnouncement(`[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`, admin.id, chatColor, textStyle, 1);
+            index_1.room.sendAnnouncement(`[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`, admin.id, chatColor, textStyle, 1);
         });
     }
     else {
         // Normal message to everyone
-        index_1.room.sendAnnouncement(`[${p.elo}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`, undefined, chatColor, textStyle, 1);
+        index_1.room.sendAnnouncement(`[Lvl.${p.level}] ${isAdmin ? '[ADMIN] ' : ''}${vipPrefix}${card}${realName}: ${msg}`, undefined, chatColor, textStyle, 1);
     }
     return true;
 });

@@ -45,21 +45,203 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getBanReason = exports.isGlobalMuteActive = exports.isPlayerBanned = exports.isPlayerMuted = exports.handleCommand = exports.isCommand = void 0;
+exports.getBanReason = exports.isGlobalMuteActive = exports.isPlayerBanned = exports.isPlayerMuted = exports.handleCommand = exports.isCommand = exports.cleanupPlayerCommands = void 0;
 const message_1 = require("./message");
-const fs = __importStar(require("fs"));
 const index_1 = require("../index");
 const chooser_1 = require("./chooser");
 const index_2 = require("../index");
-const draft_1 = require("./draft/draft");
-const settings_1 = require("./settings");
-const chooser_2 = require("./chooser");
 const config_1 = __importDefault(require("../config"));
 const afk_1 = require("./afk");
 const db_1 = require("./db");
-const settings_2 = require("./settings");
-const vips_1 = require("./vips");
-const vote_1 = require("./vote");
+const settings_1 = require("./settings");
+const teamChooser_1 = require("./teamChooser");
+const teamMutex_1 = require("./teamMutex");
+const commandState = {
+    executingCommands: new Set(),
+    commandCooldowns: new Map(),
+    lastCommandTime: new Map(),
+    cleanupTimeouts: new Map()
+};
+const COMMAND_COOLDOWN = 1000; // 1 second between commands per player
+const ADMIN_COMMAND_COOLDOWN = 500; // 0.5 seconds for admin commands
+const COMMAND_MEMORY_CLEANUP_INTERVAL = 300000; // 5 minutes
+const MAX_COMMAND_STATE_SIZE = 1000; // Max entries before forced cleanup
+// Enhanced command validation and rate limiting with memory management
+const validateCommand = (player, command) => {
+    var _a;
+    const now = Date.now();
+    const playerId = player.id;
+    // Check cooldown
+    const lastTime = commandState.lastCommandTime.get(playerId) || 0;
+    const isAdmin = ((_a = index_1.room.getPlayer(player.id)) === null || _a === void 0 ? void 0 : _a.admin) || false;
+    const cooldown = isAdmin ? ADMIN_COMMAND_COOLDOWN : COMMAND_COOLDOWN;
+    if (now - lastTime < cooldown) {
+        (0, message_1.sendMessage)(`⏱️ Çok hızlı komut giriyorsunuz. ${Math.ceil((cooldown - (now - lastTime)) / 1000)} saniye bekleyin.`, player);
+        return false;
+    }
+    // Update last command time
+    commandState.lastCommandTime.set(playerId, now);
+    // Check for concurrent command execution
+    const commandKey = `${playerId}-${command}`;
+    if (commandState.executingCommands.has(commandKey)) {
+        (0, message_1.sendMessage)("⚠️ Bu komut zaten işleniyor.", player);
+        return false;
+    }
+    commandState.executingCommands.add(commandKey);
+    // Clear any existing cleanup timeout for this command
+    const existingTimeout = commandState.cleanupTimeouts.get(commandKey);
+    if (existingTimeout) {
+        clearTimeout(existingTimeout);
+        commandState.cleanupTimeouts.delete(commandKey);
+    }
+    // Auto cleanup after 10 seconds (in case of error)
+    const timeoutId = setTimeout(() => {
+        commandState.executingCommands.delete(commandKey);
+        commandState.cleanupTimeouts.delete(commandKey);
+    }, 10000);
+    commandState.cleanupTimeouts.set(commandKey, timeoutId);
+    return true;
+};
+const finishCommand = (player, command) => {
+    const commandKey = `${player.id}-${command}`;
+    // Clear the executing command
+    commandState.executingCommands.delete(commandKey);
+    // Clear and remove the cleanup timeout since command completed normally
+    const timeoutId = commandState.cleanupTimeouts.get(commandKey);
+    if (timeoutId) {
+        clearTimeout(timeoutId);
+        commandState.cleanupTimeouts.delete(commandKey);
+    }
+};
+// Cleanup function for memory leak prevention
+const cleanupCommandState = () => {
+    try {
+        const now = Date.now();
+        const currentPlayers = new Set(index_1.room.getPlayerList().map(p => p.id));
+        let cleanedCount = 0;
+        // Clean up lastCommandTime for players who left (older than 10 minutes)
+        for (const [playerId, lastTime] of commandState.lastCommandTime.entries()) {
+            if (!currentPlayers.has(playerId) && (now - lastTime > 600000)) { // 10 minutes
+                commandState.lastCommandTime.delete(playerId);
+                commandState.commandCooldowns.delete(playerId);
+                cleanedCount++;
+            }
+        }
+        // Force cleanup if maps are getting too large
+        if (commandState.lastCommandTime.size > MAX_COMMAND_STATE_SIZE) {
+            console.warn(`[COMMAND] Command state too large (${commandState.lastCommandTime.size}), forcing cleanup`);
+            // Keep only the most recent 500 entries
+            const entries = Array.from(commandState.lastCommandTime.entries())
+                .sort((a, b) => b[1] - a[1]) // Sort by timestamp descending
+                .slice(0, 500);
+            commandState.lastCommandTime.clear();
+            commandState.commandCooldowns.clear();
+            for (const [playerId, timestamp] of entries) {
+                commandState.lastCommandTime.set(playerId, timestamp);
+            }
+            cleanedCount += MAX_COMMAND_STATE_SIZE - 500;
+        }
+        if (cleanedCount > 0) {
+            console.log(`[COMMAND] Cleaned up ${cleanedCount} stale command state entries`);
+        }
+        // Log current state size for monitoring
+        console.log(`[COMMAND] Current state sizes - Commands: ${commandState.executingCommands.size}, Times: ${commandState.lastCommandTime.size}, Timeouts: ${commandState.cleanupTimeouts.size}`);
+    }
+    catch (error) {
+        console.error(`[COMMAND] Error in command state cleanup: ${error}`);
+    }
+};
+// Regular cleanup interval to prevent memory leaks
+setInterval(cleanupCommandState, COMMAND_MEMORY_CLEANUP_INTERVAL);
+// Force cleanup on player leave
+const cleanupPlayerCommands = (playerId) => {
+    try {
+        // Remove all command state for this player
+        commandState.lastCommandTime.delete(playerId);
+        commandState.commandCooldowns.delete(playerId);
+        // Clean up any executing commands for this player
+        const playerCommands = Array.from(commandState.executingCommands)
+            .filter(cmd => cmd.startsWith(`${playerId}-`));
+        for (const cmd of playerCommands) {
+            commandState.executingCommands.delete(cmd);
+            // Clear associated timeout
+            const timeoutId = commandState.cleanupTimeouts.get(cmd);
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                commandState.cleanupTimeouts.delete(cmd);
+            }
+        }
+        console.log(`[COMMAND] Cleaned up command state for player ${playerId}`);
+    }
+    catch (error) {
+        console.error(`[COMMAND] Error cleaning up player commands: ${error}`);
+    }
+};
+exports.cleanupPlayerCommands = cleanupPlayerCommands;
+// Enhanced admin commands with mutex protection
+const handleMoveCommand = (player, targetName, targetTeam) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    if (!((_a = index_1.room.getPlayer(player.id)) === null || _a === void 0 ? void 0 : _a.admin)) {
+        (0, message_1.sendMessage)("❌ Bu komutu kullanma yetkiniz yok.", player);
+        return;
+    }
+    // Don't move during team rotation
+    if ((0, index_1.getTeamRotationInProgress)()) {
+        (0, message_1.sendMessage)("❌ Takım rotasyonu sırasında oyuncu taşınamaz.", player);
+        return;
+    }
+    try {
+        const target = index_1.room.getPlayerList().find(p => p.name.toLowerCase().includes(targetName.toLowerCase()));
+        if (!target) {
+            (0, message_1.sendMessage)(`❌ "${targetName}" isimli oyuncu bulunamadı.`, player);
+            return;
+        }
+        if (target.team === targetTeam) {
+            (0, message_1.sendMessage)(`❌ ${target.name} zaten o takımda.`, player);
+            return;
+        }
+        const teamNames = ["İzleyici", "Kırmızı", "Mavi"];
+        const teamName = teamNames[targetTeam] || "Bilinmeyen";
+        const success = yield (0, teamMutex_1.safeSetPlayerTeam)(target.id, targetTeam, `admin-move-by-${player.name}`);
+        if (success) {
+            (0, message_1.sendMessage)(`✅ ${target.name} ${teamName} takımına taşındı.`, player);
+            (0, message_1.sendMessage)(`🔄 ${player.name} (Admin) tarafından ${teamName} takımına taşındınız.`, (0, index_1.toAug)(target));
+        }
+        else {
+            (0, message_1.sendMessage)(`❌ ${target.name} taşınamadı. Tekrar deneyin.`, player);
+        }
+    }
+    catch (error) {
+        console.error(`[COMMAND] Error in move command: ${error}`);
+        (0, message_1.sendMessage)("❌ Oyuncu taşınırken hata oluştu.", player);
+    }
+});
+// Safe restart command  
+const handleRestartCommand = (player) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    if (!((_a = index_1.room.getPlayer(player.id)) === null || _a === void 0 ? void 0 : _a.admin)) {
+        (0, message_1.sendMessage)("❌ Bu komutu kullanma yetkiniz yok.", player);
+        return;
+    }
+    try {
+        console.log(`[COMMAND] Admin restart requested by ${player.name}`);
+        // Set admin game stop flag to prevent draw message
+        (0, index_1.setAdminGameStop)(true);
+        // Stop the game cleanly
+        if (index_1.room.getScores() !== null) {
+            index_1.room.stopGame();
+        }
+        // Restart after a short delay
+        setTimeout(() => {
+            (0, message_1.sendMessage)("🚀 Yeni maç başlatılıyor...");
+            index_1.room.startGame();
+        }, 1000);
+    }
+    catch (error) {
+        console.error(`[COMMAND] Error in restart command: ${error}`);
+        (0, message_1.sendMessage)("❌ Restart işleminde hata oluştu.", player);
+    }
+});
 const isCommand = (msg) => {
     const trimmed = msg.trim();
     return trimmed.startsWith("!") || trimmed.toLowerCase().startsWith("t ");
@@ -67,6 +249,7 @@ const isCommand = (msg) => {
 exports.isCommand = isCommand;
 const handleCommand = (p, msg) => __awaiter(void 0, void 0, void 0, function* () {
     const trimmed = msg.trim();
+    // Team selection is now handled in the main chat handler (index.ts)
     // Handle special case for "t {mesaj}" without !
     if (trimmed.toLowerCase().startsWith("t ") && !trimmed.startsWith("!")) {
         const teamMessage = trimmed.slice(2); // Remove "t " prefix
@@ -82,26 +265,59 @@ const handleCommand = (p, msg) => __awaiter(void 0, void 0, void 0, function* ()
     let commandText = trimmed.slice(1);
     let commandName = commandText.split(" ")[0];
     let commandArgs = commandText.split(" ").slice(1);
-    if (commands[commandName]) {
-        yield commands[commandName](p, commandArgs);
+    // Validate command execution
+    if (!validateCommand(p, commandName)) {
+        return;
     }
-    else {
-        (0, message_1.sendMessage)("Komut bulunamadı.", p);
+    try {
+        // Enhanced command handling with proper cleanup
+        if (commands[commandName]) {
+            yield commands[commandName](p, commandArgs);
+        }
+        else {
+            (0, message_1.sendMessage)("Komut bulunamadı.", p);
+        }
+    }
+    catch (error) {
+        console.error(`[COMMAND] Error executing command ${commandName}: ${error}`);
+        (0, message_1.sendMessage)("❌ Komut işlenirken hata oluştu.", p);
+    }
+    finally {
+        finishCommand(p, commandName);
     }
 });
 exports.handleCommand = handleCommand;
 // Global mute state (excluding admins)
 let globalMute = false;
 const commands = {
-    afk: (p) => setAfk(p),
-    back: (p) => setBack(p),
+    afk: (p) => toggleAfk(p),
     discord: (p) => showDiscord(p),
     dc: (p) => showDiscord(p),
     bb: (p) => bb(p),
     help: (p) => showHelp(p),
     admin: (p, args) => adminLogin(p, args),
-    draft: (p) => draft(p),
-    rs: (p) => rs(p),
+    rs: (p) => __awaiter(void 0, void 0, void 0, function* () { return yield handleRestartCommand(p); }),
+    red: (p, args) => __awaiter(void 0, void 0, void 0, function* () {
+        if (args.length === 0) {
+            (0, message_1.sendMessage)("Kullanım: !red {oyuncu_ismi}", p);
+            return;
+        }
+        yield handleMoveCommand(p, args.join(" "), 1);
+    }),
+    blue: (p, args) => __awaiter(void 0, void 0, void 0, function* () {
+        if (args.length === 0) {
+            (0, message_1.sendMessage)("Kullanım: !blue {oyuncu_ismi}", p);
+            return;
+        }
+        yield handleMoveCommand(p, args.join(" "), 2);
+    }),
+    spec: (p, args) => __awaiter(void 0, void 0, void 0, function* () {
+        if (args.length === 0) {
+            (0, message_1.sendMessage)("Kullanım: !spec {oyuncu_ismi}", p);
+            return;
+        }
+        yield handleMoveCommand(p, args.join(" "), 0);
+    }),
     script: (p) => script(p),
     version: (p) => showVersion(p),
     afksistem: (p, args) => handleAfkSystem(p, args),
@@ -134,28 +350,28 @@ const commands = {
             (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
             return;
         }
-        (0, vips_1.handleVipAdd)(p, args);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     vipsil: (p, args) => {
         if (!index_1.room.getPlayer(p.id).admin) {
             (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
             return;
         }
-        (0, vips_1.handleVipRemove)(p, args);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     vipler: (p) => {
         if (!index_1.room.getPlayer(p.id).admin) {
             (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
             return;
         }
-        (0, vips_1.handleVipList)(p);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     vipkontrol: (p, args) => {
         if (!index_1.room.getPlayer(p.id).admin) {
             (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
             return;
         }
-        (0, vips_1.handleVipCheck)(p, args);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     // Auth viewing command
     auth: (p, args) => {
@@ -167,11 +383,11 @@ const commands = {
     },
     // VIP color command
     viprenk: (p, args) => {
-        (0, vips_1.handleVipColor)(p, args);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     // VIP style command
     vipstil: (p, args) => {
-        (0, vips_1.handleVipStyle)(p, args);
+        (0, message_1.sendMessage)("❌ VIP sistem geçici olarak devre dışı.", p);
     },
     // Slow mode commands
     yavaşmod: (p, args) => {
@@ -188,6 +404,14 @@ const commands = {
         }
         handleSlowModeCommand(p, args);
     },
+    // Duplicate connection blocking system
+    yansekme: (p, args) => {
+        if (!index_1.room.getPlayer(p.id).admin) {
+            (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
+            return;
+        }
+        handleDuplicateBlocking(p, args);
+    },
     // Streak records command
     rekorseri: (p) => {
         showStreakRecords(p);
@@ -196,9 +420,41 @@ const commands = {
     ff: (p) => {
         handleFF(p);
     },
-    // Vote ban commands
-    oyla: (p, args) => (0, vote_1.handleVoteBan)(p, args),
-    vote: (p, args) => (0, vote_1.handleVoteBan)(p, args),
+    // Vote ban commands (temporarily disabled)
+    oyla: (p, args) => (0, message_1.sendMessage)("❌ Oylama sistemi geçici olarak devre dışı.", p),
+    vote: (p, args) => (0, message_1.sendMessage)("❌ Voting system temporarily disabled.", p),
+    // Level/Stats commands
+    seviye: (p, args) => showLevel(p, args),
+    level: (p, args) => showLevel(p, args),
+    lvl: (p, args) => showLevel(p, args),
+    // Team selection commands
+    seçimiptal: (p) => {
+        if (!index_1.room.getPlayer(p.id).admin) {
+            (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
+            return;
+        }
+        if ((0, teamChooser_1.isSelectionActive)()) {
+            (0, teamChooser_1.forceEndSelection)();
+            (0, message_1.sendMessage)("Oyuncu seçimi iptal edildi.", p);
+        }
+        else {
+            (0, message_1.sendMessage)("Şu anda aktif bir oyuncu seçimi yok.", p);
+        }
+    },
+    // Auto-balance command
+    dengele: (p) => {
+        if (!index_1.room.getPlayer(p.id).admin) {
+            (0, message_1.sendMessage)("Bu komutu sadece adminler kullanabilir.", p);
+            return;
+        }
+        const balanced = (0, teamChooser_1.checkAndAutoBalance)();
+        if (balanced) {
+            (0, message_1.sendMessage)("⚖️ Takımlar otomatik olarak dengelendi!", p);
+        }
+        else {
+            (0, message_1.sendMessage)("ℹ️ Takımlar zaten dengeli veya otomatik dengeleme gerekli değil.", p);
+        }
+    },
 };
 const adminLogin = (p, args) => {
     if (args.length < 1) {
@@ -268,70 +524,76 @@ const teamChat = (p, args) => {
         }
     });
 };
-const draft = (p) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
-    if (!index_1.room.getPlayer(p.id).admin) {
-        (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
-        return;
-    }
-    (0, message_1.sendMessage)(`${p.name} haritayı taslak moduna aldı`);
-    (0, chooser_2.changeDuringDraft)(true);
-    const result = yield (0, draft_1.performDraft)(index_1.room, index_1.room.getPlayerList(), settings_1.teamSize);
-    index_1.room.getPlayerList().forEach((p) => {
-        if (p.team != 0) {
+// Old rs function replaced with handleRestartCommand
+const toggleAfk = (p) => __awaiter(void 0, void 0, void 0, function* () {
+    if (p.afk) {
+        // Player is currently AFK, bring them back
+        p.afk = false;
+        (0, message_1.sendMessage)("🔄 AFK modundan çıktın. Takım seçimine ekleniyor...", p);
+        // Check if there's an active selection first
+        if ((0, teamChooser_1.isSelectionActive)()) {
+            // Just mark as non-AFK, they'll be added to spectators automatically
             index_1.room.setPlayerTeam(p.id, 0);
+            (0, message_1.sendMessage)("⏳ Aktif takım seçimi var. Seçim bitince oyuna dahil olacaksın.", p);
         }
-    });
-    (_a = result === null || result === void 0 ? void 0 : result.red) === null || _a === void 0 ? void 0 : _a.forEach((p) => index_1.room.setPlayerTeam(p.id, 1));
-    (_b = result === null || result === void 0 ? void 0 : result.blue) === null || _b === void 0 ? void 0 : _b.forEach((p) => index_1.room.setPlayerTeam(p.id, 2));
-    (0, chooser_2.changeDuringDraft)(false);
+        else {
+            // Move to spectators and check if team selection should start
+            index_1.room.setPlayerTeam(p.id, 0);
+            // Small delay to ensure team assignment is processed
+            setTimeout(() => {
+                if ((0, teamChooser_1.shouldTriggerSelection)()) {
+                    (0, teamChooser_1.startSelection)();
+                    (0, message_1.sendMessage)("🎯 Takım seçimi başladı! Seçilmeyi bekle.", p);
+                }
+                else {
+                    // If no team selection triggered, try to add to game normally
+                    (0, chooser_1.addToGame)(index_1.room, index_1.room.getPlayer(p.id));
+                }
+            }, 100);
+        }
+    }
+    else {
+        // Player is not AFK, put them in AFK mode
+        const wasInTeam = p.team !== 0;
+        p.afk = true;
+        index_1.room.setPlayerTeam(p.id, 0);
+        (0, message_1.sendMessage)("😴 AFK moduna geçtin. Tekrar !afk yazarak geri dönebilirsin.", p);
+        if (wasInTeam) {
+            (0, message_1.sendMessage)("👥 Takımdan ayrıldın ve izleyiciye geçtin.", p);
+            // Handle player leaving team for auto-balancing
+            yield (0, chooser_1.handlePlayerLeaveOrAFK)(p);
+        }
+    }
 });
-const rs = (p) => {
-    if (!index_1.room.getPlayer(p.id).admin) {
-        (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
-        return;
-    }
-    index_1.room.stopGame();
-    const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-        encoding: "utf8",
-        flag: "r",
-    });
-    index_1.room.setCustomStadium(rsStadium);
-    (0, message_1.sendMessage)(`${p.name} haritayı değiştirdi`);
-};
-const setAfk = (p) => {
-    p.afk = true;
-    index_1.room.setPlayerTeam(p.id, 0);
-    (0, message_1.sendMessage)("Artık AFK'sın.", p);
-    (0, chooser_1.handlePlayerLeaveOrAFK)();
-};
-const setBack = (p) => {
-    if (!p.afk) {
-        (0, message_1.sendMessage)("Zaten geri döndün.", p);
-        return;
-    }
-    p.afk = false;
-    (0, chooser_1.addToGame)(index_1.room, index_1.room.getPlayer(p.id));
-    (0, message_1.sendMessage)("Geri döndün.", p);
-};
 const showHelp = (p) => {
     const isAdmin = index_1.room.getPlayer(p.id).admin;
     if (isAdmin) {
-        (0, message_1.sendMessage)(`${config_1.default.roomName} - Yönetici Komutları: !admin, !draft, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat)`, p);
+        (0, message_1.sendMessage)(`${config_1.default.roomName} - Yönetici Komutları: !admin, !rs, !afksistem (aç/kapat), !mute, !unmute, !muteliler, !ban, !bankaldır, !banlılar, !clearbans, !susun, !konuşun, !kick, !ofsayt (aç/kapat), !yavaşmod (aç/kapat), !yansekme (aç/kapat), !seçimiptal, !dengele`, p);
         (0, message_1.sendMessage)(`Ban Kullanımı: !ban <ID_veya_İsim> [sebep] (Çevrimiçi ve çevrimdışı oyuncular için)`, p);
         (0, message_1.sendMessage)(`VIP Komutları: !vipekle, !vipsil, !vipler, !vipkontrol`, p);
         (0, message_1.sendMessage)(`Bilgi Komutları: !auth <oyuncu>`, p);
-        (0, message_1.sendMessage)(`Genel Komutlar: !afk, !back, !discord, !bb, !help, !version, !script`, p);
+        (0, message_1.sendMessage)(`Genel Komutlar: !afk (toggle), !discord, !bb, !help, !version, !script, !seviye (!level, !lvl)`, p);
     }
     else {
-        (0, message_1.sendMessage)(`${config_1.default.roomName} - Komutlar: !afk, !back, !discord (!dc), !bb, !help, !version, !script, !rekorseri, !ff, !oyla (!vote)`, p);
+        (0, message_1.sendMessage)(`${config_1.default.roomName} - Komutlar: !afk (toggle), !discord (!dc), !bb, !help, !version, !script, !rekorseri, !ff, !oyla (!vote)`, p);
+        (0, message_1.sendMessage)(`📊 Seviye Komutları: !seviye (!level, !lvl) - Seviye ve deneyim bilgilerinizi görün`, p);
+        (0, message_1.sendMessage)(`😴 AFK Sistemi: !afk - İlk kullanımda AFK moduna geçer (izleyiciye), ikinci kullanımda geri döner (takım seçimine)`, p);
         (0, message_1.sendMessage)(`🗳️ Oylama: !oyla <ID> (5 oy ile 24 saat ban, VIP oyları 2 sayılır, 5dk+ oyunda bulunma gerekli)`, p);
-        // Show VIP commands if player is VIP
-        if ((0, vips_1.isPlayerVip)(p.auth)) {
-            (0, message_1.sendMessage)(`🌟 VIP Komutları: !viprenk <renk>, !vipstil <stil>`, p);
-            (0, message_1.sendMessage)(`🎨 Renkler: sarı, kırmızı, mavi, yeşil, pembe, mor`, p);
-            (0, message_1.sendMessage)(`✨ Stiller: bold, italic, küçük, normal`, p);
-        }
+        // Show VIP commands if player is VIP (temporarily disabled)
+        // if (isPlayerVip(p.auth)) {
+        //   sendMessage(
+        //     `🌟 VIP Komutları: !viprenk <renk>, !vipstil <stil>`,
+        //     p,
+        //   );
+        //   sendMessage(
+        //     `🎨 Renkler: sarı, kırmızı, mavi, yeşil, pembe, mor`,
+        //     p,
+        //   );
+        //   sendMessage(
+        //     `✨ Stiller: bold, italic, küçük, normal`,
+        //     p,
+        //   );
+        // }
     }
 };
 const showDiscord = (p) => {
@@ -409,6 +671,36 @@ const handleAfkSystem = (p, args) => {
     }
     else {
         (0, message_1.sendMessage)("Kullanım: !afksistem aç veya !afksistem kapat", p);
+    }
+};
+const handleDuplicateBlocking = (p, args) => {
+    if (!index_1.room.getPlayer(p.id).admin) {
+        (0, message_1.sendMessage)("❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.", p);
+        return;
+    }
+    if (args.length < 1) {
+        (0, message_1.sendMessage)("Kullanım: !yansekme aç veya !yansekme kapat", p);
+        return;
+    }
+    const action = args[0].toLowerCase();
+    if (action === "kapat") {
+        if (!(0, settings_1.getDuplicateBlockingEnabled)()) {
+            (0, message_1.sendMessage)("Yansekme engelleme sistemi zaten kapalı.", p);
+            return;
+        }
+        (0, settings_1.setDuplicateBlockingEnabled)(false);
+        (0, message_1.sendMessage)(`${p.name} yansekme engelleme sistemini kapattı. Artık aynı hesapla birden fazla giriş yapılabilir.`);
+    }
+    else if (action === "aç") {
+        if ((0, settings_1.getDuplicateBlockingEnabled)()) {
+            (0, message_1.sendMessage)("Yansekme engelleme sistemi zaten açık.", p);
+            return;
+        }
+        (0, settings_1.setDuplicateBlockingEnabled)(true);
+        (0, message_1.sendMessage)(`${p.name} yansekme engelleme sistemini açtı. Artık aynı hesapla birden fazla giriş engellenecek.`);
+    }
+    else {
+        (0, message_1.sendMessage)("Kullanım: !yansekme aç veya !yansekme kapat", p);
     }
 };
 // Helper functions
@@ -735,29 +1027,29 @@ const handleOffsideCommand = (p, args) => {
         return;
     }
     if (args.length < 1) {
-        const currentStatus = (0, settings_2.getOffsideEnabled)() ? "açık" : "kapalı";
+        const currentStatus = (0, settings_1.getOffsideEnabled)() ? "açık" : "kapalı";
         (0, message_1.sendMessage)(`Kullanım: !ofsayt aç veya !ofsayt kapat | Şu anki durum: ${currentStatus}`, p);
         return;
     }
     const action = args[0].toLowerCase();
     if (action === "aç" || action === "ac") {
-        if ((0, settings_2.getOffsideEnabled)()) {
+        if ((0, settings_1.getOffsideEnabled)()) {
             (0, message_1.sendMessage)("Ofsayt sistemi zaten açık.", p);
             return;
         }
-        (0, settings_2.setOffsideEnabled)(true);
+        (0, settings_1.setOffsideEnabled)(true);
         (0, message_1.sendMessage)(`${p.name} ofsayt sistemini açtı. ⚽ Ofsayt kuralları aktif!`);
     }
     else if (action === "kapat") {
-        if (!(0, settings_2.getOffsideEnabled)()) {
+        if (!(0, settings_1.getOffsideEnabled)()) {
             (0, message_1.sendMessage)("Ofsayt sistemi zaten kapalı.", p);
             return;
         }
-        (0, settings_2.setOffsideEnabled)(false);
+        (0, settings_1.setOffsideEnabled)(false);
         (0, message_1.sendMessage)(`${p.name} ofsayt sistemini kapattı. ❌ Ofsayt kuralları devre dışı!`);
     }
     else {
-        const currentStatus = (0, settings_2.getOffsideEnabled)() ? "açık" : "kapalı";
+        const currentStatus = (0, settings_1.getOffsideEnabled)() ? "açık" : "kapalı";
         (0, message_1.sendMessage)(`Geçersiz parametre. Kullanım: !ofsayt aç veya !ofsayt kapat | Şu anki durum: ${currentStatus}`, p);
     }
 };
@@ -835,9 +1127,9 @@ const getBanReason = (auth) => __awaiter(void 0, void 0, void 0, function* () {
 exports.getBanReason = getBanReason;
 const handleSlowModeCommand = (p, args) => {
     if (args.length < 1) {
-        const status = (0, settings_2.getSlowModeEnabled)() ? "açık" : "kapalı";
-        const normalCooldown = Math.ceil(settings_2.slowModeSettings.normalUsers / 1000);
-        const vipCooldown = Math.ceil(settings_2.slowModeSettings.vipUsers / 1000);
+        const status = (0, settings_1.getSlowModeEnabled)() ? "açık" : "kapalı";
+        const normalCooldown = Math.ceil(settings_1.slowModeSettings.normalUsers / 1000);
+        const vipCooldown = Math.ceil(settings_1.slowModeSettings.vipUsers / 1000);
         (0, message_1.sendMessage)(`⏰ Yavaş mod durumu: ${status}`, p);
         (0, message_1.sendMessage)(`📊 Cooldown süreleri - Normal: ${normalCooldown}s, VIP: ${vipCooldown}s, Admin: 0s`, p);
         (0, message_1.sendMessage)("Kullanım: !yavaşmod <aç/kapat>", p);
@@ -845,21 +1137,21 @@ const handleSlowModeCommand = (p, args) => {
     }
     const action = args[0].toLowerCase();
     if (action === "aç" || action === "ac" || action === "on" || action === "1") {
-        if ((0, settings_2.getSlowModeEnabled)()) {
+        if ((0, settings_1.getSlowModeEnabled)()) {
             (0, message_1.sendMessage)("⏰ Yavaş mod zaten açık!", p);
             return;
         }
-        (0, settings_2.setSlowModeEnabled)(true);
+        (0, settings_1.setSlowModeEnabled)(true);
         (0, message_1.sendMessage)("⏰ Yavaş mod açıldı!", undefined);
         (0, message_1.sendMessage)("📊 Normal kullanıcılar 3 saniyede bir, VIP kullanıcılar 1 saniyede bir mesaj atabilir.", undefined);
         (0, message_1.sendMessage)("👑 Adminler etkilenmez.", undefined);
     }
     else if (action === "kapat" || action === "off" || action === "0") {
-        if (!(0, settings_2.getSlowModeEnabled)()) {
+        if (!(0, settings_1.getSlowModeEnabled)()) {
             (0, message_1.sendMessage)("⏰ Yavaş mod zaten kapalı!", p);
             return;
         }
-        (0, settings_2.setSlowModeEnabled)(false);
+        (0, settings_1.setSlowModeEnabled)(false);
         (0, message_1.sendMessage)("⏰ Yavaş mod kapatıldı!", undefined);
         // Clear all existing cooldowns
         Promise.resolve().then(() => __importStar(require("../index"))).then(({ players }) => {
@@ -964,3 +1256,44 @@ const showStreakRecords = (p) => {
         (0, message_1.sendMessage)("❌ Rekor verileri gösterilirken hata oluştu.", p);
     }
 };
+const showLevel = (p, args) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        let targetPlayer = p;
+        let targetAuth = p.auth;
+        // If arguments provided, admin can check other players
+        if (args.length > 0 && index_1.room.getPlayer(p.id).admin) {
+            const targetName = args.join(" ");
+            const foundPlayer = index_1.room.getPlayerList().find(pl => pl.name.toLowerCase().includes(targetName.toLowerCase()));
+            if (foundPlayer) {
+                targetPlayer = (0, index_1.toAug)(foundPlayer);
+                targetAuth = foundPlayer.auth;
+            }
+            else {
+                (0, message_1.sendMessage)(`❌ "${targetName}" isimli oyuncu bulunamadı.`, p);
+                return;
+            }
+        }
+        // Get player data from database
+        const playerData = yield index_1.db.get("SELECT experience, level FROM players WHERE auth=?", [targetAuth]);
+        if (!playerData) {
+            (0, message_1.sendMessage)("❌ Oyuncu verileri bulunamadı.", p);
+            return;
+        }
+        const { experience, level } = playerData;
+        // Calculate XP needed for next level
+        const { calculateXpForNextLevel } = yield Promise.resolve().then(() => __importStar(require("./levels")));
+        const xpForNextLevel = calculateXpForNextLevel(level);
+        const currentLevelXp = level > 1 ? calculateXpForNextLevel(level - 1) : 0;
+        const progressInCurrentLevel = experience - (level > 1 ? calculateXpForNextLevel(level - 1) : 0);
+        const progressMessage = `📊 ${targetPlayer.name} - Seviye Bilgileri:
+🏆 Seviye: Lvl.${level}
+⭐ Deneyim: ${experience} XP
+📈 Bu seviye: ${progressInCurrentLevel}/${xpForNextLevel} XP
+🎯 Sonraki seviye: ${xpForNextLevel - progressInCurrentLevel} XP kaldı`;
+        (0, message_1.sendMessage)(progressMessage, p);
+    }
+    catch (error) {
+        console.error("Level gösterme hatası:", error);
+        (0, message_1.sendMessage)("❌ Seviye bilgileri gösterilirken hata oluştu.", p);
+    }
+});

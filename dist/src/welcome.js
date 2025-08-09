@@ -20,6 +20,7 @@ const config_1 = __importDefault(require("../config"));
 const welcomePlayer = (room, p) => {
     (0, message_1.sendMessage)(`${config_1.default.roomName}\nTüm komutları görmek için "!help" yaz.`, p);
     (0, message_1.sendMessage)(`"X" tuşuna kısa bas kaydır, uzun bas koş. Takım içi paslar topa daha güçlü vurmanı sağlar.`, p);
+    (0, message_1.sendMessage)(`🏆 Yeni seviye sistemi! Oyun oynayarak XP kazan ve seviye atla. !seviye ile ilerlemeni gör.`, p);
     (0, message_1.sendMessage)(`Discord: discord.gg/profstriker`, p);
 };
 exports.welcomePlayer = welcomePlayer;
@@ -45,6 +46,8 @@ const initPlayer = (p) => __awaiter(void 0, void 0, void 0, function* () {
     __1.players.push(newPlayer);
     const readPlayer = yield (0, db_1.getOrCreatePlayer)(p);
     newPlayer.elo = readPlayer.elo;
+    newPlayer.experience = readPlayer.experience;
+    newPlayer.level = readPlayer.level;
     yield __1.db.run("UPDATE players SET name=? WHERE auth=?", [p.name, p.auth]);
 });
 exports.initPlayer = initPlayer;

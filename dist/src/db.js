@@ -18,6 +18,8 @@ const createTables = (db) => __awaiter(void 0, void 0, void 0, function* () {
             "auth"	TEXT NOT NULL,
             "name"	TEXT,
             "elo"	INTEGER,
+            "experience"	INTEGER DEFAULT 0,
+            "level"	INTEGER DEFAULT 1,
             PRIMARY KEY("id" AUTOINCREMENT)
     );`,
         `CREATE UNIQUE INDEX auth ON players(auth)`,
@@ -60,21 +62,32 @@ const initDb = () => __awaiter(void 0, void 0, void 0, function* () {
     catch (e) {
         console.log("\nDB tables already created.");
     }
+    // Migration: Add experience and level columns if they don't exist
+    try {
+        yield exports.db.run("ALTER TABLE players ADD COLUMN experience INTEGER DEFAULT 0");
+        yield exports.db.run("ALTER TABLE players ADD COLUMN level INTEGER DEFAULT 1");
+        console.log("Added experience and level columns to existing database.");
+    }
+    catch (e) {
+        // Columns already exist, which is fine
+    }
     return exports.db;
 });
 exports.initDb = initDb;
 const getOrCreatePlayer = (p) => __awaiter(void 0, void 0, void 0, function* () {
     const auth = p.auth;
-    const playerInDb = yield exports.db.get("SELECT elo FROM players WHERE auth=?", [
+    const playerInDb = yield exports.db.get("SELECT elo, experience, level FROM players WHERE auth=?", [
         auth,
     ]);
     if (!playerInDb) {
-        yield exports.db.run("INSERT INTO players(auth, name, elo) VALUES (?, ?, ?)", [
+        yield exports.db.run("INSERT INTO players(auth, name, elo, experience, level) VALUES (?, ?, ?, ?, ?)", [
             p.auth,
             p.name,
             1200,
+            0,
+            1,
         ]);
-        const newPlayer = { elo: 1200 };
+        const newPlayer = { elo: 1200, experience: 0, level: 1 };
         return newPlayer;
     }
     return playerInDb;
