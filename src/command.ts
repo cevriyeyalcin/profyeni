@@ -1,6 +1,6 @@
 import { sendMessage } from "./message";
 import * as fs from "fs";
-import { room, PlayerAugmented, version, toAug, db } from "../index";
+import { room, PlayerAugmented, version, toAug, db, setAdminGameStop } from "../index";
 import { addToGame, handlePlayerLeaveOrAFK } from "./chooser";
 import { adminPass } from "../index";
 import { teamSize } from "./settings";
@@ -304,6 +304,7 @@ const rs = (p: PlayerAugmented) => {
     );
     return;
   }
+  setAdminGameStop(true); // Set flag before stopping game
   room.stopGame();
   const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
     encoding: "utf8",

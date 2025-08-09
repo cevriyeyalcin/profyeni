@@ -29,6 +29,10 @@ let finalScores: {red: number, blue: number} | null = null;
 let isTeamRotationInProgress = false;
 export const getTeamRotationInProgress = () => isTeamRotationInProgress;
 
+// Admin-initiated game stop flag to prevent incorrect draw messages
+let isAdminGameStop = false;
+export const setAdminGameStop = (value: boolean) => { isAdminGameStop = value; };
+
 // Streak records system
 interface StreakRecord {
   count: number;
@@ -1315,6 +1319,14 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   room.onGameStop = (byUser) => {
   
   if (game) {
+    
+    // Check if this was an admin-initiated stop (like !rs command)
+    if (isAdminGameStop) {
+      console.log(`[GAME_STOP] Admin-initiated stop detected - skipping normal end game logic`);
+      isAdminGameStop = false; // Reset flag
+      game = null;
+      return;
+    }
     
     // Check if game ended by forfeit first
     if (game.endedByForfeit.hasForfeited) {
