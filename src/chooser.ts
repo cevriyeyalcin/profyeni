@@ -131,9 +131,10 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
   // They will be chosen by teams using the team chooser system
   
   // Check if we should show the waiting message
+  // Use a longer delay to allow validation checks to complete first
   setTimeout(() => {
     checkAndShowWaitingMessage();
-  }, 100); // Small delay to ensure team assignment is complete
+  }, 500); // Longer delay to ensure validation checks complete first
 };
 
 const initChooser = (room: RoomObject) => {

@@ -73,8 +73,11 @@ export const shouldTriggerSelection = (): boolean => {
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
-  // Need at least 1 spectator, teams not full (max 6 per team), and teams should be reasonably balanced
-  return spectators.length >= 1 && 
+  // If teams are balanced, require at least 2 spectators to avoid false triggers when someone joins/leaves temporarily
+  const minSpectators = Math.abs(redCount - blueCount) === 0 ? 2 : 1;
+  
+  // Need enough spectators, teams not full (max 6 per team), and teams should be reasonably balanced
+  return spectators.length >= minSpectators && 
          (redCount < 6 || blueCount < 6) && 
          Math.abs(redCount - blueCount) <= 2; // Allow up to 2 player difference
 };

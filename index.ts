@@ -1120,6 +1120,8 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
         return
       }
     }
+    
+    // All validation passed - now initialize the player
     welcomePlayer(room, p);
     room.setPlayerAvatar(p.id, "");
     await initPlayer(p);
