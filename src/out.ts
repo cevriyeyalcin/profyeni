@@ -66,23 +66,29 @@ export const handleBallOutOfBounds = (game: Game) => {
       return; // Exit early - don't do normal throw-in/corner/goal kick
     }
     
-    // Check if teams need auto-balancing first
+    // Normal out-of-bounds handling when no advantage active
+    throwFakeBall(ball);
+    
+    // After setting up the throw-in/corner, check for team selection
+    let selectionTriggered = false;
     if (checkAndAutoBalance()) {
       // Auto-balancing occurred, trigger selection if spectators are now available
       if (shouldTriggerSelection()) {
         startSelection();
-        return; // Selection will handle game resumption
+        selectionTriggered = true;
       }
     } else {
       // Check if team selection should be triggered
       if (shouldTriggerSelection()) {
         startSelection();
-        return; // Selection will handle game resumption
+        selectionTriggered = true;
       }
     }
     
-    // Normal out-of-bounds handling when no advantage active
-    throwFakeBall(ball);
+    // If selection was triggered, return early (throw-in is already set up)
+    if (selectionTriggered) {
+      return;
+    }
     
     if (isOutLeft) {
       // LEFT BORDER
