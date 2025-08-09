@@ -131,8 +131,8 @@ const checkAFK = async (): Promise<void> => {
   }
 };
 
-// Safe AFK timeout with deadlock prevention
-room.onPlayerActivity = async (player) => {
+// AFK player activity handler function
+const handlePlayerActivity = async (player: any) => {
   try {
     // Don't process during team rotation
     if (getTeamRotationInProgress()) {
@@ -205,4 +205,19 @@ export const forceCleanupAFK = (): void => {
   afkState.checking = false;
   afkState.playersBeingProcessed.clear();
   afkState.lastCheck = 0;
+};
+
+// Initialize AFK system after room is created
+export const initializeAFKSystem = (): void => {
+  if (!room) {
+    console.error(`[AFK] Cannot initialize AFK system - room is not defined`);
+    return;
+  }
+  
+  console.log(`[AFK] Initializing AFK system`);
+  
+  // Set up player activity handler
+  room.onPlayerActivity = handlePlayerActivity;
+  
+  console.log(`[AFK] AFK system initialized successfully`);
 };

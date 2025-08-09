@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.forceCleanupAFK = exports.isAfkSystemEnabled = exports.setAfkSystemEnabled = void 0;
+exports.initializeAFKSystem = exports.forceCleanupAFK = exports.isAfkSystemEnabled = exports.setAfkSystemEnabled = void 0;
 const index_1 = require("../index");
 const message_1 = require("./message");
 const teamMutex_1 = require("./teamMutex");
@@ -118,8 +118,8 @@ const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
         release();
     }
 });
-// Safe AFK timeout with deadlock prevention
-index_1.room.onPlayerActivity = (player) => __awaiter(void 0, void 0, void 0, function* () {
+// AFK player activity handler function
+const handlePlayerActivity = (player) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Don't process during team rotation
         if ((0, index_1.getTeamRotationInProgress)()) {
@@ -185,3 +185,15 @@ const forceCleanupAFK = () => {
     afkState.lastCheck = 0;
 };
 exports.forceCleanupAFK = forceCleanupAFK;
+// Initialize AFK system after room is created
+const initializeAFKSystem = () => {
+    if (!index_1.room) {
+        console.error(`[AFK] Cannot initialize AFK system - room is not defined`);
+        return;
+    }
+    console.log(`[AFK] Initializing AFK system`);
+    // Set up player activity handler
+    index_1.room.onPlayerActivity = handlePlayerActivity;
+    console.log(`[AFK] AFK system initialized successfully`);
+};
+exports.initializeAFKSystem = initializeAFKSystem;

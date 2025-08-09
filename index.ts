@@ -742,6 +742,10 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   const { initVipSystem } = await import("./src/vips");
   initVipSystem();
   
+  // Initialize AFK system
+  const { initializeAFKSystem } = await import("./src/afk");
+  initializeAFKSystem();
+  
   const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
     encoding: "utf8",
     flag: "r",
@@ -1119,9 +1123,7 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
     }
   };
 
-  room.onPlayerActivity = (p) => {
-    // afk.onActivity(p); // This line is removed as per the edit hint
-  };
+  // room.onPlayerActivity will be set by initializeAFKSystem()
 
   room.onPlayerJoin = async (p) => {
     if (!p.auth) {

@@ -588,6 +588,9 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
     // Initialize VIP system
     const { initVipSystem } = yield Promise.resolve().then(() => __importStar(require("./src/vips")));
     initVipSystem();
+    // Initialize AFK system
+    const { initializeAFKSystem } = yield Promise.resolve().then(() => __importStar(require("./src/afk")));
+    initializeAFKSystem();
     const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
         encoding: "utf8",
         flag: "r",
@@ -916,9 +919,7 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
             console.log("Hata:", e);
         }
     };
-    exports.room.onPlayerActivity = (p) => {
-        // afk.onActivity(p); // This line is removed as per the edit hint
-    };
+    // room.onPlayerActivity will be set by initializeAFKSystem()
     exports.room.onPlayerJoin = (p) => __awaiter(void 0, void 0, void 0, function* () {
         if (!p.auth) {
             exports.room.kickPlayer(p.id, "Auth anahtarınız geçersiz. haxball.com/playerauth adresinden değiştirin", false);
