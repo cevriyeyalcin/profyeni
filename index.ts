@@ -19,7 +19,7 @@ import { initDb } from "./src/db";
 import { setBallInvMassAndColor, teamplayBoost } from "./src/teamplayBoost";
 import { applyRotation } from "./src/rotateBall";
 import { defaults, getDuplicateBlockingEnabled } from "./src/settings";
-import { afk } from "./src/afk";
+import { setAfkSystemEnabled, isAfkSystemEnabled } from "./src/afk";
 import { initPlayer } from "./src/welcome";
 import * as crypto from "node:crypto";
 
@@ -1102,7 +1102,7 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
           game.handleBallInPlay();
         }
         game.applySlowdown();
-        afk.onTick();
+        // afk.onTick(); // This line is removed as per the edit hint
         game.checkAllX();
         game.checkFoul();
         
@@ -1119,7 +1119,7 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   };
 
   room.onPlayerActivity = (p) => {
-    afk.onActivity(p);
+    // afk.onActivity(p); // This line is removed as per the edit hint
   };
 
   room.onPlayerJoin = async (p) => {
@@ -1248,9 +1248,13 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
       const numberMatch = msg.trim().match(/^\d+$/);
       if (numberMatch) {
         console.log(`[CHAT] Number detected: ${msg}, calling handleSelection`);
-        const handled = handleSelection(pp, msg.trim());
-        console.log(`[CHAT] handleSelection returned: ${handled}`);
-        if (handled) return false; // Selection consumed the message
+        // Handle async selection without blocking
+        handleSelection(pp, msg.trim()).then(handled => {
+          console.log(`[CHAT] handleSelection returned: ${handled}`);
+        }).catch(error => {
+          console.error(`[CHAT] handleSelection error: ${error}`);
+        });
+        return false; // Always consume selection messages
       }
     }
 

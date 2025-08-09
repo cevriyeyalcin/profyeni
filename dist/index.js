@@ -61,7 +61,6 @@ const welcome_1 = require("./src/welcome");
 const db_1 = require("./src/db");
 const teamplayBoost_1 = require("./src/teamplayBoost");
 const settings_1 = require("./src/settings");
-const afk_1 = require("./src/afk");
 const welcome_2 = require("./src/welcome");
 const crypto = __importStar(require("node:crypto"));
 let finalScores = null;
@@ -902,7 +901,7 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
                     exports.game.handleBallInPlay();
                 }
                 exports.game.applySlowdown();
-                afk_1.afk.onTick();
+                // afk.onTick(); // This line is removed as per the edit hint
                 exports.game.checkAllX();
                 exports.game.checkFoul();
                 // Auto-clean expired VIPs
@@ -917,7 +916,7 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
         }
     };
     exports.room.onPlayerActivity = (p) => {
-        afk_1.afk.onActivity(p);
+        // afk.onActivity(p); // This line is removed as per the edit hint
     };
     exports.room.onPlayerJoin = (p) => __awaiter(void 0, void 0, void 0, function* () {
         if (!p.auth) {
@@ -1024,10 +1023,13 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
             const numberMatch = msg.trim().match(/^\d+$/);
             if (numberMatch) {
                 console.log(`[CHAT] Number detected: ${msg}, calling handleSelection`);
-                const handled = (0, teamChooser_1.handleSelection)(pp, msg.trim());
-                console.log(`[CHAT] handleSelection returned: ${handled}`);
-                if (handled)
-                    return false; // Selection consumed the message
+                // Handle async selection without blocking
+                (0, teamChooser_1.handleSelection)(pp, msg.trim()).then(handled => {
+                    console.log(`[CHAT] handleSelection returned: ${handled}`);
+                }).catch(error => {
+                    console.error(`[CHAT] handleSelection error: ${error}`);
+                });
+                return false; // Always consume selection messages
             }
         }
         if ((0, command_1.isCommand)(msg)) {

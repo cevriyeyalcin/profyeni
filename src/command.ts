@@ -1,16 +1,147 @@
 import { sendMessage } from "./message";
 import * as fs from "fs";
-import { room, PlayerAugmented, version, toAug, db, setAdminGameStop } from "../index";
+import { room, PlayerAugmented, version, toAug, db, setAdminGameStop, getTeamRotationInProgress } from "../index";
 import { addToGame, handlePlayerLeaveOrAFK } from "./chooser";
 import { adminPass } from "../index";
 import { teamSize } from "./settings";
 import config from "../config";
-import { setAfkSystemEnabled, isAfkSystemEnabled } from "./afk";
+import { setAfkSystemEnabled, isAfkSystemEnabled, forceCleanupAFK } from "./afk";
 import { addBan, removeBan, getBan, getAllBans, clearAllBans as clearBansInDb, addMute, removeMute, getMute, getAllMutes, cleanExpiredMutes, searchPlayerByName, searchPlayersByName } from "./db";
 import { setOffsideEnabled, getOffsideEnabled, setSlowModeEnabled, getSlowModeEnabled, slowModeSettings, setDuplicateBlockingEnabled, getDuplicateBlockingEnabled } from "./settings";
-import { handleVipAdd, handleVipRemove, handleVipList, handleVipCheck, handleVipColor, handleVipStyle, isPlayerVip } from "./vips";
-import { handleVoteBan } from "./vote";
-import { forceEndSelection, isSelectionActive, checkAndAutoBalance, shouldTriggerSelection, startSelection } from "./teamChooser";
+import { handlePlayerLeave, forceEndSelection, isSelectionActive, startSelection, shouldTriggerSelection, checkAndAutoBalance } from "./teamChooser";
+import { teamMutex, safeSetPlayerTeam } from "./teamMutex";
+
+// Command execution state to prevent race conditions
+interface CommandState {
+  executingCommands: Set<string>;
+  commandCooldowns: Map<number, number>;
+  lastCommandTime: Map<number, number>;
+}
+
+const commandState: CommandState = {
+  executingCommands: new Set(),
+  commandCooldowns: new Map(),
+  lastCommandTime: new Map()
+};
+
+const COMMAND_COOLDOWN = 1000; // 1 second between commands per player
+const ADMIN_COMMAND_COOLDOWN = 500; // 0.5 seconds for admin commands
+
+// Enhanced command validation and rate limiting
+const validateCommand = (player: PlayerAugmented, command: string): boolean => {
+  const now = Date.now();
+  const playerId = player.id;
+  
+  // Check cooldown
+  const lastTime = commandState.lastCommandTime.get(playerId) || 0;
+  const isAdmin = room.getPlayer(player.id)?.admin || false;
+  const cooldown = isAdmin ? ADMIN_COMMAND_COOLDOWN : COMMAND_COOLDOWN;
+  
+  if (now - lastTime < cooldown) {
+    sendMessage(`⏱️ Çok hızlı komut giriyorsunuz. ${Math.ceil((cooldown - (now - lastTime)) / 1000)} saniye bekleyin.`, player);
+    return false;
+  }
+  
+  // Update last command time
+  commandState.lastCommandTime.set(playerId, now);
+  
+  // Check for concurrent command execution
+  const commandKey = `${playerId}-${command}`;
+  if (commandState.executingCommands.has(commandKey)) {
+    sendMessage("⚠️ Bu komut zaten işleniyor.", player);
+    return false;
+  }
+  
+  commandState.executingCommands.add(commandKey);
+  
+  // Auto cleanup after 10 seconds (in case of error)
+  setTimeout(() => {
+    commandState.executingCommands.delete(commandKey);
+  }, 10000);
+  
+  return true;
+};
+
+const finishCommand = (player: PlayerAugmented, command: string): void => {
+  const commandKey = `${player.id}-${command}`;
+  commandState.executingCommands.delete(commandKey);
+};
+
+// Enhanced admin commands with mutex protection
+const handleMoveCommand = async (player: PlayerAugmented, targetName: string, targetTeam: number): Promise<void> => {
+  if (!room.getPlayer(player.id)?.admin) {
+    sendMessage("❌ Bu komutu kullanma yetkiniz yok.", player);
+    return;
+  }
+  
+  // Don't move during team rotation
+  if (getTeamRotationInProgress()) {
+    sendMessage("❌ Takım rotasyonu sırasında oyuncu taşınamaz.", player);
+    return;
+  }
+  
+  try {
+    const target = room.getPlayerList().find(p => 
+      p.name.toLowerCase().includes(targetName.toLowerCase())
+    );
+    
+    if (!target) {
+      sendMessage(`❌ "${targetName}" isimli oyuncu bulunamadı.`, player);
+      return;
+    }
+    
+    if (target.team === targetTeam) {
+      sendMessage(`❌ ${target.name} zaten o takımda.`, player);
+      return;
+    }
+    
+    const teamNames = ["İzleyici", "Kırmızı", "Mavi"];
+    const teamName = teamNames[targetTeam] || "Bilinmeyen";
+    
+    const success = await safeSetPlayerTeam(target.id, targetTeam, `admin-move-by-${player.name}`);
+    
+    if (success) {
+      sendMessage(`✅ ${target.name} ${teamName} takımına taşındı.`, player);
+      sendMessage(`🔄 ${player.name} (Admin) tarafından ${teamName} takımına taşındınız.`, toAug(target));
+    } else {
+      sendMessage(`❌ ${target.name} taşınamadı. Tekrar deneyin.`, player);
+    }
+    
+  } catch (error) {
+    console.error(`[COMMAND] Error in move command: ${error}`);
+    sendMessage("❌ Oyuncu taşınırken hata oluştu.", player);
+  }
+};
+
+// Safe restart command  
+const handleRestartCommand = async (player: PlayerAugmented): Promise<void> => {
+  if (!room.getPlayer(player.id)?.admin) {
+    sendMessage("❌ Bu komutu kullanma yetkiniz yok.", player);
+    return;
+  }
+  
+  try {
+    console.log(`[COMMAND] Admin restart requested by ${player.name}`);
+    
+    // Set admin game stop flag to prevent draw message
+    setAdminGameStop(true);
+    
+    // Stop the game cleanly
+    if (room.getScores() !== null) {
+      room.stopGame();
+    }
+    
+    // Restart after a short delay
+    setTimeout(() => {
+      sendMessage("🚀 Yeni maç başlatılıyor...");
+      room.startGame();
+    }, 1000);
+    
+  } catch (error) {
+    console.error(`[COMMAND] Error in restart command: ${error}`);
+    sendMessage("❌ Restart işleminde hata oluştu.", player);
+  }
+};
 
 export const isCommand = (msg: string) => {
   const trimmed = msg.trim();
@@ -38,10 +169,23 @@ export const handleCommand = async (p: PlayerAugmented, msg: string): Promise<vo
   let commandName = commandText.split(" ")[0];
   let commandArgs = commandText.split(" ").slice(1);
   
-  if (commands[commandName]) {
-    await commands[commandName](p, commandArgs);
-  } else {
-    sendMessage("Komut bulunamadı.", p);
+  // Validate command execution
+  if (!validateCommand(p, commandName)) {
+    return;
+  }
+
+  try {
+    // Enhanced command handling with proper cleanup
+    if (commands[commandName]) {
+      await commands[commandName](p, commandArgs);
+    } else {
+      sendMessage("Komut bulunamadı.", p);
+    }
+  } catch (error) {
+    console.error(`[COMMAND] Error executing command ${commandName}: ${error}`);
+    sendMessage("❌ Komut işlenirken hata oluştu.", p);
+  } finally {
+    finishCommand(p, commandName);
   }
 };
 
@@ -60,7 +204,28 @@ const commands: { [key: string]: commandFunc } = {
   help: (p) => showHelp(p),
   admin: (p, args) => adminLogin(p, args),
 
-  rs: (p) => rs(p),
+  rs: async (p) => await handleRestartCommand(p),
+  red: async (p, args) => {
+    if (args.length === 0) {
+      sendMessage("Kullanım: !red {oyuncu_ismi}", p);
+      return;
+    }
+    await handleMoveCommand(p, args.join(" "), 1);
+  },
+  blue: async (p, args) => {
+    if (args.length === 0) {
+      sendMessage("Kullanım: !blue {oyuncu_ismi}", p);
+      return;
+    }
+    await handleMoveCommand(p, args.join(" "), 2);
+  },
+  spec: async (p, args) => {
+    if (args.length === 0) {
+      sendMessage("Kullanım: !spec {oyuncu_ismi}", p);
+      return;
+    }
+    await handleMoveCommand(p, args.join(" "), 0);
+  },
   script: (p) => script(p),
   version: (p) => showVersion(p),
   afksistem: (p, args) => handleAfkSystem(p, args),
@@ -101,28 +266,28 @@ const commands: { [key: string]: commandFunc } = {
       sendMessage("Bu komutu sadece adminler kullanabilir.", p);
       return;
     }
-    handleVipAdd(p, args);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   vipsil: (p, args) => {
     if (!room.getPlayer(p.id).admin) {
       sendMessage("Bu komutu sadece adminler kullanabilir.", p);
       return;
     }
-    handleVipRemove(p, args);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   vipler: (p) => {
     if (!room.getPlayer(p.id).admin) {
       sendMessage("Bu komutu sadece adminler kullanabilir.", p);
       return;
     }
-    handleVipList(p);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   vipkontrol: (p, args) => {
     if (!room.getPlayer(p.id).admin) {
       sendMessage("Bu komutu sadece adminler kullanabilir.", p);
       return;
     }
-    handleVipCheck(p, args);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   
   // Auth viewing command
@@ -136,12 +301,12 @@ const commands: { [key: string]: commandFunc } = {
   
   // VIP color command
   viprenk: (p, args) => {
-    handleVipColor(p, args);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   
   // VIP style command
   vipstil: (p, args) => {
-    handleVipStyle(p, args);
+    sendMessage("❌ VIP sistem geçici olarak devre dışı.", p);
   },
   
   // Slow mode commands
@@ -179,9 +344,9 @@ const commands: { [key: string]: commandFunc } = {
     handleFF(p);
   },
   
-  // Vote ban commands
-  oyla: (p, args) => handleVoteBan(p, args),
-  vote: (p, args) => handleVoteBan(p, args),
+  // Vote ban commands (temporarily disabled)
+  oyla: (p, args) => sendMessage("❌ Oylama sistemi geçici olarak devre dışı.", p),
+  vote: (p, args) => sendMessage("❌ Voting system temporarily disabled.", p),
   
   // Level/Stats commands
   seviye: (p, args) => showLevel(p, args),
@@ -296,23 +461,7 @@ const teamChat = (p: PlayerAugmented, args: string[]) => {
 
 
 
-const rs = (p: PlayerAugmented) => {
-  if (!room.getPlayer(p.id).admin) {
-    sendMessage(
-      "❌ Sadece YETKİLİ komutu. Eğer yetkiliysen, !admin ile giriş yap.",
-      p,
-    );
-    return;
-  }
-  setAdminGameStop(true); // Set flag before stopping game
-  room.stopGame();
-  const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-    encoding: "utf8",
-    flag: "r",
-  });
-  room.setCustomStadium(rsStadium);
-  sendMessage(`${p.name} haritayı değiştirdi`);
-};
+// Old rs function replaced with handleRestartCommand
 
 const toggleAfk = async (p: PlayerAugmented) => {
   if (p.afk) {
@@ -397,21 +546,21 @@ const showHelp = (p: PlayerAugmented) => {
       p,
     );
     
-    // Show VIP commands if player is VIP
-    if (isPlayerVip(p.auth)) {
-      sendMessage(
-        `🌟 VIP Komutları: !viprenk <renk>, !vipstil <stil>`,
-        p,
-      );
-      sendMessage(
-        `🎨 Renkler: sarı, kırmızı, mavi, yeşil, pembe, mor`,
-        p,
-      );
-      sendMessage(
-        `✨ Stiller: bold, italic, küçük, normal`,
-        p,
-      );
-    }
+    // Show VIP commands if player is VIP (temporarily disabled)
+    // if (isPlayerVip(p.auth)) {
+    //   sendMessage(
+    //     `🌟 VIP Komutları: !viprenk <renk>, !vipstil <stil>`,
+    //     p,
+    //   );
+    //   sendMessage(
+    //     `🎨 Renkler: sarı, kırmızı, mavi, yeşil, pembe, mor`,
+    //     p,
+    //   );
+    //   sendMessage(
+    //     `✨ Stiller: bold, italic, küçük, normal`,
+    //     p,
+    //   );
+    // }
   }
 };
 
