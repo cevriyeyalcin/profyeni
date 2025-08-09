@@ -1,4 +1,4 @@
-import { room, players, PlayerAugmented, db } from "..";
+import { room, players, PlayerAugmented, db, getTeamRotationInProgress } from "..";
 import * as fs from "fs";
 import { sendMessage } from "./message";
 import { game, Game } from "..";
@@ -31,6 +31,12 @@ const balanceTeams = () => {
 };
 
 export const handlePlayerLeaveOrAFK = async (leftPlayer?: PlayerAugmented) => {
+  // Don't handle team changes during rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[CHOOSER] Team rotation in progress - skipping player leave/AFK handling`);
+    return;
+  }
+  
   // Handle team chooser if a player left
   if (leftPlayer) {
     handleTeamChooserLeave(leftPlayer);
@@ -114,6 +120,12 @@ export const addToGame = (room: RoomObject, p: PlayerObject) => {
     return;
   }
   
+  // Don't assign players to teams during rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[CHOOSER] Team rotation in progress - skipping player assignment`);
+    return;
+  }
+
   // Only assign first 2 players to teams (1 red, 1 blue)
   // All other players stay as spectators for team chooser system
   const redCount = red().length;

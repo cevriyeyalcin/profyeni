@@ -25,6 +25,10 @@ import * as crypto from "node:crypto";
 
 let finalScores: {red: number, blue: number} | null = null;
 
+// Team rotation state to prevent interference from other systems
+let isTeamRotationInProgress = false;
+export const getTeamRotationInProgress = () => isTeamRotationInProgress;
+
 // Streak records system
 interface StreakRecord {
   count: number;
@@ -459,6 +463,10 @@ const checkScoreDifference = () => {
 
 const applyTeamRotation = (winnerTeam: number, loserTeam: number) => {
   try {
+    // Set rotation flag to prevent interference from other systems
+    isTeamRotationInProgress = true;
+    console.log(`[TEAM_ROTATION] Starting rotation - BLOCKING other systems`);
+    
     const allPlayers = room.getPlayerList();
     
     // Mevcut takımları topla ve isimleri ile logla
@@ -497,8 +505,10 @@ const applyTeamRotation = (winnerTeam: number, loserTeam: number) => {
         const teamName = loserTeam === 1 ? 'Kırmızı' : 'Mavi';
         sendMessage(`🔄 Takımlar yer değiştirdi! Eski ${loserTeam === 1 ? 'Kırmızı' : 'Mavi'} takım oyuncuları ${teamName} takıma geçti.`);
         
-        // Start new game
+        // Clear rotation flag and start new game
         setTimeout(() => {
+          isTeamRotationInProgress = false;
+          console.log(`[TEAM_ROTATION] Rotation complete - UNBLOCKING other systems`);
           sendMessage("🚀 Yeni maç başlatılıyor...");
           room.startGame();
         }, 1500);
@@ -543,7 +553,9 @@ const applyTeamRotation = (winnerTeam: number, loserTeam: number) => {
           
           console.log(`[TEAM_ROTATION] Final state - Red: ${finalRed}, Blue: ${finalBlue}, Spectators: ${finalSpecs}`);
           
-          // Start new game
+          // Clear rotation flag and start new game
+          isTeamRotationInProgress = false;
+          console.log(`[TEAM_ROTATION] Rotation complete - UNBLOCKING other systems`);
           sendMessage("🚀 Yeni maç başlatılıyor...");
           room.startGame();
         }, 1500);
@@ -554,6 +566,10 @@ const applyTeamRotation = (winnerTeam: number, loserTeam: number) => {
   } catch (error) {
     console.error("Takım rotasyonu hatası:", error);
     sendMessage("⚠️ Takım rotasyonunda bir hata oluştu.");
+    
+    // Clear rotation flag even on error
+    isTeamRotationInProgress = false;
+    console.log(`[TEAM_ROTATION] Rotation failed - UNBLOCKING other systems`);
     
     // Hata durumunda da maçı yeniden başlat
     setTimeout(() => {

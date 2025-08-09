@@ -45,7 +45,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateWinStreak = exports.adminPass = exports.db = exports.game = exports.room = exports.toAug = exports.players = exports.Game = exports.PlayerAugmented = exports.version = void 0;
+exports.updateWinStreak = exports.adminPass = exports.db = exports.game = exports.room = exports.toAug = exports.players = exports.Game = exports.PlayerAugmented = exports.version = exports.getTeamRotationInProgress = void 0;
 const chooser_1 = require("./src/chooser");
 const teamChooser_1 = require("./src/teamChooser");
 const command_1 = require("./src/command");
@@ -65,6 +65,10 @@ const afk_1 = require("./src/afk");
 const welcome_2 = require("./src/welcome");
 const crypto = __importStar(require("node:crypto"));
 let finalScores = null;
+// Team rotation state to prevent interference from other systems
+let isTeamRotationInProgress = false;
+const getTeamRotationInProgress = () => isTeamRotationInProgress;
+exports.getTeamRotationInProgress = getTeamRotationInProgress;
 const getFieldZone = (x, y) => {
     // Saha bölgelerini tanımla
     if (x < -100)
@@ -354,6 +358,9 @@ const checkScoreDifference = () => {
 // Bu fonksiyonu index.ts'te güncelleyin:
 const applyTeamRotation = (winnerTeam, loserTeam) => {
     try {
+        // Set rotation flag to prevent interference from other systems
+        isTeamRotationInProgress = true;
+        console.log(`[TEAM_ROTATION] Starting rotation - BLOCKING other systems`);
         const allPlayers = exports.room.getPlayerList();
         // Mevcut takımları topla ve isimleri ile logla
         const winners = allPlayers.filter(p => p.team === winnerTeam);
@@ -382,8 +389,10 @@ const applyTeamRotation = (winnerTeam, loserTeam) => {
                 });
                 const teamName = loserTeam === 1 ? 'Kırmızı' : 'Mavi';
                 (0, message_1.sendMessage)(`🔄 Takımlar yer değiştirdi! Eski ${loserTeam === 1 ? 'Kırmızı' : 'Mavi'} takım oyuncuları ${teamName} takıma geçti.`);
-                // Start new game
+                // Clear rotation flag and start new game
                 setTimeout(() => {
+                    isTeamRotationInProgress = false;
+                    console.log(`[TEAM_ROTATION] Rotation complete - UNBLOCKING other systems`);
                     (0, message_1.sendMessage)("🚀 Yeni maç başlatılıyor...");
                     exports.room.startGame();
                 }, 1500);
@@ -418,7 +427,9 @@ const applyTeamRotation = (winnerTeam, loserTeam) => {
                     const finalBlue = finalPlayers.filter(p => p.team === 2).length;
                     const finalSpecs = finalPlayers.filter(p => p.team === 0).length;
                     console.log(`[TEAM_ROTATION] Final state - Red: ${finalRed}, Blue: ${finalBlue}, Spectators: ${finalSpecs}`);
-                    // Start new game
+                    // Clear rotation flag and start new game
+                    isTeamRotationInProgress = false;
+                    console.log(`[TEAM_ROTATION] Rotation complete - UNBLOCKING other systems`);
                     (0, message_1.sendMessage)("🚀 Yeni maç başlatılıyor...");
                     exports.room.startGame();
                 }, 1500);
@@ -428,6 +439,9 @@ const applyTeamRotation = (winnerTeam, loserTeam) => {
     catch (error) {
         console.error("Takım rotasyonu hatası:", error);
         (0, message_1.sendMessage)("⚠️ Takım rotasyonunda bir hata oluştu.");
+        // Clear rotation flag even on error
+        isTeamRotationInProgress = false;
+        console.log(`[TEAM_ROTATION] Rotation failed - UNBLOCKING other systems`);
         // Hata durumunda da maçı yeniden başlat
         setTimeout(() => {
             exports.room.startGame();

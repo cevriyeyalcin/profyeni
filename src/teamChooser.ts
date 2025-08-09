@@ -1,4 +1,4 @@
-import { room, players, PlayerAugmented, toAug } from "../index";
+import { room, players, PlayerAugmented, toAug, getTeamRotationInProgress } from "../index";
 import { sendMessage } from "./message";
 
 // Team chooser state
@@ -69,6 +69,12 @@ const getTeamMembers = () => {
 
 // Check if team selection should be triggered
 export const shouldTriggerSelection = (): boolean => {
+  // Don't trigger selection during team rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress - skipping trigger check`);
+    return false;
+  }
+  
   const spectators = getSpectators();
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
@@ -98,6 +104,11 @@ export const shouldTriggerSelection = (): boolean => {
 
 // Check if we should show the "waiting for ball out" message
 export const checkAndShowWaitingMessage = (): void => {
+  // Don't show waiting message during team rotation
+  if (getTeamRotationInProgress()) {
+    return;
+  }
+  
   // Don't show if selection is already active
   if (chooserState.isActive) return;
   
@@ -146,6 +157,12 @@ export const checkAndShowWaitingMessage = (): void => {
 
 // Check if teams are uneven and auto-balance by moving players to spectators
 export const checkAndAutoBalance = (): boolean => {
+  // Don't auto-balance during team rotation
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress - skipping auto-balance`);
+    return false;
+  }
+  
   const redPlayers = getRedPlayers();
   const bluePlayers = getBluePlayers();
   const rawSpectators = getSpectators();
@@ -237,6 +254,12 @@ export const startSelection = (): void => {
     return;
   }
   
+  // Don't start if team rotation is in progress
+  if (getTeamRotationInProgress()) {
+    console.log(`[TEAM_CHOOSER] Team rotation in progress, cannot start team selection.`);
+    return;
+  }
+
   // Get and validate current spectators before starting
   const rawSpectators = getSpectators();
   const validSpectators = rawSpectators.filter(p => {

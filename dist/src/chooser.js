@@ -40,6 +40,11 @@ const balanceTeams = () => {
     }
 };
 const handlePlayerLeaveOrAFK = (leftPlayer) => __awaiter(void 0, void 0, void 0, function* () {
+    // Don't handle team changes during rotation
+    if ((0, __1.getTeamRotationInProgress)()) {
+        console.log(`[CHOOSER] Team rotation in progress - skipping player leave/AFK handling`);
+        return;
+    }
     // Handle team chooser if a player left
     if (leftPlayer) {
         (0, teamChooser_1.handlePlayerLeave)(leftPlayer);
@@ -105,6 +110,11 @@ const addToGame = (room, p) => {
         return;
     }
     if (exports.duringDraft) {
+        return;
+    }
+    // Don't assign players to teams during rotation
+    if ((0, __1.getTeamRotationInProgress)()) {
+        console.log(`[CHOOSER] Team rotation in progress - skipping player assignment`);
         return;
     }
     // Only assign first 2 players to teams (1 red, 1 blue)
