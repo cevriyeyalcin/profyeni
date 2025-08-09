@@ -1143,9 +1143,17 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
   };
 
   room.onPlayerLeave = async (p) => {
-    const leavingPlayer = toAug(p);
-    players = players.filter((pp) => p.id != pp.id);
-    await handlePlayerLeaveOrAFK(leavingPlayer);
+    try {
+      const leavingPlayer = toAug(p);
+      players = players.filter((pp) => p.id != pp.id);
+      await handlePlayerLeaveOrAFK(leavingPlayer);
+    } catch (error) {
+      // Player was likely kicked before being properly added to players array
+      console.warn(`[onPlayerLeave] Player ${p.id} not found in players array - likely kicked during join. Cleaning up anyway.`);
+      players = players.filter((pp) => p.id != pp.id);
+      // Still call handlePlayerLeaveOrAFK without the leavingPlayer object
+      await handlePlayerLeaveOrAFK();
+    }
   };
 
   room.onPlayerChat = (p, msg) => {
