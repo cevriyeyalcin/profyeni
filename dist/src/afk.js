@@ -20,7 +20,7 @@ const afkState = {
     playersBeingProcessed: new Set()
 };
 const AFK_CHECK_INTERVAL = 5000; // 5 seconds minimum between checks
-// Enhanced AFK detection with mutex protection
+// Enhanced AFK detection with deadlock prevention
 const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!afkSystemEnabled)
         return;
@@ -45,6 +45,7 @@ const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
         afkState.lastCheck = now;
         console.log(`[AFK] Starting enhanced AFK check`);
         const activePlayers = index_1.room.getPlayerList().filter(p => p.team !== 0);
+        const afkMoves = [];
         for (const player of activePlayers) {
             // Skip if already being processed
             if (afkState.playersBeingProcessed.has(player.id)) {
@@ -71,15 +72,11 @@ const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
                         console.log(`[AFK] Player ${player.name} already spectator, skipping`);
                         continue;
                     }
-                    // Perform safe team move to spectators
-                    const success = yield (0, teamMutex_1.safeSetPlayerTeam)(player.id, 0, "AFK-detection");
-                    if (success) {
-                        (0, message_1.sendMessage)(`⏸️ ${player.name} AFK olduğu için izleyiciye taşındı.`);
-                        console.log(`[AFK] Successfully moved ${player.name} to spectators due to AFK`);
-                    }
-                    else {
-                        console.warn(`[AFK] Failed to move ${player.name} to spectators`);
-                    }
+                    // Queue for batch processing to avoid nested mutex calls
+                    afkMoves.push({
+                        playerId: player.id,
+                        reason: `AFK-detection-${player.name}`
+                    });
                 }
             }
             catch (error) {
@@ -87,6 +84,28 @@ const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
             }
             finally {
                 afkState.playersBeingProcessed.delete(player.id);
+            }
+        }
+        // Process all AFK moves at once using direct assignments (we already have mutex)
+        if (afkMoves.length > 0) {
+            console.log(`[AFK] Processing ${afkMoves.length} AFK moves`);
+            for (const move of afkMoves) {
+                try {
+                    const success = (0, teamMutex_1.setPlayerTeamDirect)(move.playerId, 0, move.reason);
+                    if (success) {
+                        const player = index_1.room.getPlayer(move.playerId);
+                        if (player) {
+                            (0, message_1.sendMessage)(`⏸️ ${player.name} AFK olduğu için izleyiciye taşındı.`);
+                            console.log(`[AFK] Successfully moved ${player.name} to spectators due to AFK`);
+                        }
+                    }
+                    else {
+                        console.warn(`[AFK] Failed to move player ${move.playerId} to spectators`);
+                    }
+                }
+                catch (error) {
+                    console.error(`[AFK] Error in AFK move for player ${move.playerId}: ${error}`);
+                }
             }
         }
         console.log(`[AFK] AFK check completed successfully`);
@@ -99,7 +118,7 @@ const checkAFK = () => __awaiter(void 0, void 0, void 0, function* () {
         release();
     }
 });
-// Safe AFK timeout with validation
+// Safe AFK timeout with deadlock prevention
 index_1.room.onPlayerActivity = (player) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Don't process during team rotation
@@ -113,26 +132,10 @@ index_1.room.onPlayerActivity = (player) => __awaiter(void 0, void 0, void 0, fu
         const augPlayer = (0, index_1.toAug)(player);
         if (augPlayer.afk && player.team !== 0) {
             console.log(`[AFK] Activity trigger - Player ${player.name} is AFK in team ${player.team}, moving to spectators`);
-            const release = yield teamMutex_1.teamMutex.acquire(`afkActivity-${player.id}`);
-            try {
-                afkState.playersBeingProcessed.add(player.id);
-                // Double-check state before moving
-                const freshPlayer = index_1.room.getPlayer(player.id);
-                if (!freshPlayer || freshPlayer.team === 0) {
-                    return;
-                }
-                const freshAugPlayer = (0, index_1.toAug)(freshPlayer);
-                if (!freshAugPlayer.afk) {
-                    return;
-                }
-                const success = yield (0, teamMutex_1.safeSetPlayerTeam)(player.id, 0, "AFK-activity-trigger");
-                if (success) {
-                    (0, message_1.sendMessage)(`⏸️ ${player.name} AFK olduğu için izleyiciye taşındı.`);
-                }
-            }
-            finally {
-                afkState.playersBeingProcessed.delete(player.id);
-                release();
+            // Use conditional assignment to avoid unnecessary mutex if player is already spectator
+            const success = yield (0, teamMutex_1.conditionalSetPlayerTeam)(player.id, 0, "AFK-activity-trigger");
+            if (success) {
+                (0, message_1.sendMessage)(`⏸️ ${player.name} AFK olduğu için izleyiciye taşındı.`);
             }
         }
     }
@@ -140,15 +143,25 @@ index_1.room.onPlayerActivity = (player) => __awaiter(void 0, void 0, void 0, fu
         console.error(`[AFK] Error in activity handler: ${error}`);
     }
 });
-// Enhanced cleanup for AFK state
+// Enhanced cleanup for AFK state with memory leak prevention
 const cleanupAFKState = () => {
-    const currentPlayers = new Set(index_1.room.getPlayerList().map(p => p.id));
-    // Remove references to players who left
-    for (const playerId of afkState.playersBeingProcessed) {
-        if (!currentPlayers.has(playerId)) {
-            console.log(`[AFK] Cleaning up stale reference to player ${playerId}`);
-            afkState.playersBeingProcessed.delete(playerId);
+    try {
+        const currentPlayers = new Set(index_1.room.getPlayerList().map(p => p.id));
+        let cleanedCount = 0;
+        // Remove references to players who left
+        for (const playerId of afkState.playersBeingProcessed) {
+            if (!currentPlayers.has(playerId)) {
+                console.log(`[AFK] Cleaning up stale reference to player ${playerId}`);
+                afkState.playersBeingProcessed.delete(playerId);
+                cleanedCount++;
+            }
         }
+        if (cleanedCount > 0) {
+            console.log(`[AFK] Cleaned up ${cleanedCount} stale AFK references`);
+        }
+    }
+    catch (error) {
+        console.error(`[AFK] Error in AFK cleanup: ${error}`);
     }
 };
 // Regular cleanup interval

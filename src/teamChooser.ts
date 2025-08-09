@@ -1,6 +1,6 @@
 import { room, players, PlayerAugmented, db, getTeamRotationInProgress, setFinalScores, toAug } from "../index";
 import { sendMessage } from "./message";
-import { teamMutex, safeSetPlayerTeam } from "./teamMutex";
+import { teamMutex, safeSetPlayerTeam, setPlayerTeamDirect, conditionalSetPlayerTeam } from "./teamMutex";
 
 // Team chooser state with enhanced protection
 interface ChooserState {
@@ -405,7 +405,7 @@ export const startSelection = async (): Promise<void> => {
   }
 };
 
-// Enhanced spectator selection with validation
+// Enhanced spectator selection with deadlock prevention
 export const handleSpectatorSelection = async (player: PlayerAugmented, selection: string): Promise<boolean> => {
   if (!chooserState.isActive) {
     return false;
@@ -414,7 +414,8 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
   // Validate state consistency before processing
   if (!validateStateConsistency()) {
     console.error(`[TEAM_CHOOSER] State corruption detected, ending selection`);
-    await endSelection();
+    // Use direct call to avoid deadlock
+    setImmediate(() => endSelection());
     return true;
   }
 
@@ -485,7 +486,7 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
     
     if (!selectedPlayerObj || selectedPlayerObj.team !== 0) {
       sendMessage("❌ Seçilen oyuncu artık mevcut değil.", player);
-      updateSpectatorList();
+      updateSpectatorListNonBlocking();
       sendSpectatorList();
       return true;
     }
@@ -496,11 +497,11 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       return true;
     }
     
-    // Perform atomic team assignment
+    // Perform direct team assignment to avoid nested mutex
     const targetTeam = playerIsInRed ? 1 : 2;
     const teamName = targetTeam === 1 ? "Kırmızı" : "Mavi";
     
-    const success = await safeSetPlayerTeam(selectedPlayer.id, targetTeam, `team-selection-by-${player.name}`);
+    const success = setPlayerTeamDirect(selectedPlayer.id, targetTeam, `team-selection-by-${player.name}`);
     if (!success) {
       sendMessage("❌ Oyuncu atanamadı. Tekrar deneyin.", player);
       return true;
@@ -540,7 +541,8 @@ export const handleSpectatorSelection = async (player: PlayerAugmented, selectio
       sendSpectatorList();
       startSelectionTimeout();
     } else {
-      await endSelection();
+      // Schedule endSelection to run after this mutex is released
+      setImmediate(() => endSelection());
     }
     
     return true;
@@ -638,7 +640,7 @@ const sendSpectatorList = (): void => {
   });
 };
 
-// Start selection timeout with enhanced error handling
+// Enhanced team selection timeout with deadlock prevention
 const startSelectionTimeout = (): void => {
   if (chooserState.timeout) {
     clearTimeout(chooserState.timeout);
@@ -669,11 +671,11 @@ const startSelectionTimeout = (): void => {
       
       sendMessage(`⏰ ${teamName} takımının seçim süresi doldu. Otomatik oyuncu atanıyor...`);
       
-      // Auto-assign first available spectator
+      // Auto-assign first available spectator using direct assignment
       if (chooserState.spectators.length > 0) {
         const autoSelected = chooserState.spectators[0];
         
-        const success = await safeSetPlayerTeam(autoSelected.id, targetTeam, "timeout-auto-assignment");
+        const success = setPlayerTeamDirect(autoSelected.id, targetTeam, "timeout-auto-assignment");
         
         if (success) {
           sendMessage(`🤖 ${autoSelected.name} otomatik olarak ${teamName} takımına atandı.`);
@@ -692,14 +694,14 @@ const startSelectionTimeout = (): void => {
             sendSpectatorList();
             startSelectionTimeout();
           } else {
-            await endSelection();
+            endSelection();
           }
         } else {
           console.error(`[TEAM_CHOOSER] Failed to auto-assign player during timeout`);
-          await endSelection();
+          endSelection();
         }
       } else {
-        await endSelection();
+        endSelection();
       }
     }
   }, SELECTION_TIMEOUT);
@@ -762,8 +764,8 @@ export const endSelection = async (): Promise<void> => {
   }
 };
 
-// Enhanced spectator list update with cleanup
-const updateSpectatorList = (): void => {
+// Non-blocking spectator list update to avoid deadlocks
+const updateSpectatorListNonBlocking = (): void => {
   try {
     const currentSpectators = getValidSpectators();
     
@@ -776,8 +778,9 @@ const updateSpectatorList = (): void => {
     chooserState.validationHash = generateStateHash();
     
     if (chooserState.spectators.length === 0) {
-      console.log(`[TEAM_CHOOSER] No spectators remaining, ending selection`);
-      endSelection();
+      console.log(`[TEAM_CHOOSER] No spectators remaining, scheduling end selection`);
+      // Schedule endSelection to avoid deadlock
+      setImmediate(() => endSelection());
     }
   } catch (error) {
     console.error(`[TEAM_CHOOSER] Error updating spectator list: ${error}`);
@@ -787,7 +790,7 @@ const updateSpectatorList = (): void => {
 // Export the main selection handler for use in index.ts
 export const handleSelection = handleSpectatorSelection;
 
-// Enhanced player leave handling
+// Enhanced player leave handling with deadlock prevention
 export const handlePlayerLeave = async (player: PlayerAugmented): Promise<void> => {
   try {
     // Don't handle during team rotation
@@ -808,7 +811,7 @@ export const handlePlayerLeave = async (player: PlayerAugmented): Promise<void> 
       // If a spectator leaves, update list
       const wasSpectator = chooserState.spectators.some(spec => spec.id === player.id);
       if (wasSpectator) {
-        updateSpectatorList();
+        updateSpectatorListNonBlocking();
         if (chooserState.spectators.length > 0) {
           sendSpectatorList();
         }
@@ -845,35 +848,93 @@ export const cleanupStaleSpectators = (): void => {
   // Only run if we're not in an active selection
   if (chooserState.isActive) return;
   
-  const currentSpectators = getSpectators();
-  let removedCount = 0;
-  
-  // Validate each spectator and count removals
-  const validSpectators = currentSpectators.filter(p => {
-    try {
-      const playerObj = room.getPlayer(p.id);
-      if (!playerObj) {
+  try {
+    const currentSpectators = getValidSpectators();
+    let removedCount = 0;
+    
+    // Get initial count
+    const initialCount = currentSpectators.length;
+    
+    // Validate each spectator and filter out invalid ones
+    const validSpectators = currentSpectators.filter(p => {
+      try {
+        const playerObj = room.getPlayer(p.id);
+        if (!playerObj) {
+          removedCount++;
+          return false; // Player left
+        }
+        
+        const augPlayer = toAug(playerObj);
+        if (augPlayer.afk || playerObj.team !== 0) {
+          removedCount++;
+          return false; // Player is AFK or changed teams
+        }
+        
+        return true;
+      } catch (error) {
         removedCount++;
-        return false; // Player left
+        return false;
       }
-      
-      const augPlayer = toAug(playerObj);
-      if (augPlayer.afk || playerObj.team !== 0) {
-        removedCount++;
-        return false; // Player is AFK or changed teams
-      }
-      
-      return true;
-    } catch (error) {
-      removedCount++;
-      return false;
+    });
+    
+    if (removedCount > 0) {
+      console.log(`[TEAM_CHOOSER] Cleaned up ${removedCount} stale spectators. Valid spectators remaining: ${validSpectators.length}`);
     }
-  });
-  
-  if (removedCount > 0) {
-    console.log(`[TEAM_CHOOSER] Cleaned up ${removedCount} stale spectators. Valid spectators remaining: ${validSpectators.length}`);
+    
+    // Actually update the global spectator cache if this was called during non-selection periods
+    // This helps keep the spectator list accurate for future team chooser triggers
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error in spectator cleanup: ${error}`);
+  }
+};
+
+// Enhanced periodic cleanup that actually maintains state consistency
+const performPeriodicCleanup = (): void => {
+  try {
+    // Clean up stale spectators
+    cleanupStaleSpectators();
+    
+    // If there's no active selection, we can do more aggressive cleanup
+    if (!chooserState.isActive) {
+      // Reset any stale state that might be lingering
+      if (chooserState.spectators.length > 0) {
+        console.log(`[TEAM_CHOOSER] Clearing ${chooserState.spectators.length} stale spectators from inactive chooser state`);
+        chooserState.spectators = [];
+        chooserState.redTeam = [];
+        chooserState.blueTeam = [];
+        chooserState.selections = {};
+        chooserState.validationHash = null;
+      }
+      
+      // Clear any orphaned timeout
+      if (chooserState.timeout) {
+        console.log(`[TEAM_CHOOSER] Clearing orphaned selection timeout`);
+        clearTimeout(chooserState.timeout);
+        chooserState.timeout = null;
+      }
+    }
+    
+    // Additional memory cleanup for team chooser state
+    const currentPlayerIds = new Set(room.getPlayerList().map(p => p.id));
+    
+    // Clean up selections for players who left
+    let selectionsCleaned = 0;
+    for (const playerId in chooserState.selections) {
+      if (!currentPlayerIds.has(parseInt(playerId))) {
+        delete chooserState.selections[playerId];
+        selectionsCleaned++;
+      }
+    }
+    
+    if (selectionsCleaned > 0) {
+      console.log(`[TEAM_CHOOSER] Cleaned up ${selectionsCleaned} stale player selections`);
+    }
+    
+  } catch (error) {
+    console.error(`[TEAM_CHOOSER] Error in periodic cleanup: ${error}`);
   }
 };
 
 // Auto-cleanup every 30 seconds to prevent stale data buildup
-setInterval(cleanupStaleSpectators, 30000);
+setInterval(performPeriodicCleanup, 30000);

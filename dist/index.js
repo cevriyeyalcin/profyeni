@@ -62,6 +62,7 @@ const db_1 = require("./src/db");
 const teamplayBoost_1 = require("./src/teamplayBoost");
 const settings_1 = require("./src/settings");
 const welcome_2 = require("./src/welcome");
+const command_2 = require("./src/command");
 const crypto = __importStar(require("node:crypto"));
 let finalScores = null;
 // Team rotation state to prevent interference from other systems
@@ -994,6 +995,7 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
             const leavingPlayer = (0, exports.toAug)(p);
             exports.players = exports.players.filter((pp) => p.id != pp.id);
             yield (0, chooser_1.handlePlayerLeaveOrAFK)(leavingPlayer);
+            (0, command_2.cleanupPlayerCommands)(leavingPlayer.id);
         }
         catch (error) {
             // Player was likely kicked before being properly added to players array
@@ -1001,6 +1003,7 @@ const roomBuilder = (HBInit, args) => __awaiter(void 0, void 0, void 0, function
             exports.players = exports.players.filter((pp) => p.id != pp.id);
             // Still call handlePlayerLeaveOrAFK without the leavingPlayer object
             yield (0, chooser_1.handlePlayerLeaveOrAFK)();
+            (0, command_2.cleanupPlayerCommands)(p.id);
         }
     });
     exports.room.onPlayerChat = (p, msg) => {

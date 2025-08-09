@@ -16,18 +16,22 @@ interface CommandState {
   executingCommands: Set<string>;
   commandCooldowns: Map<number, number>;
   lastCommandTime: Map<number, number>;
+  cleanupTimeouts: Map<string, NodeJS.Timeout>; // Track cleanup timeouts
 }
 
 const commandState: CommandState = {
   executingCommands: new Set(),
   commandCooldowns: new Map(),
-  lastCommandTime: new Map()
+  lastCommandTime: new Map(),
+  cleanupTimeouts: new Map()
 };
 
 const COMMAND_COOLDOWN = 1000; // 1 second between commands per player
 const ADMIN_COMMAND_COOLDOWN = 500; // 0.5 seconds for admin commands
+const COMMAND_MEMORY_CLEANUP_INTERVAL = 300000; // 5 minutes
+const MAX_COMMAND_STATE_SIZE = 1000; // Max entries before forced cleanup
 
-// Enhanced command validation and rate limiting
+// Enhanced command validation and rate limiting with memory management
 const validateCommand = (player: PlayerAugmented, command: string): boolean => {
   const now = Date.now();
   const playerId = player.id;
@@ -54,17 +58,114 @@ const validateCommand = (player: PlayerAugmented, command: string): boolean => {
   
   commandState.executingCommands.add(commandKey);
   
+  // Clear any existing cleanup timeout for this command
+  const existingTimeout = commandState.cleanupTimeouts.get(commandKey);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+    commandState.cleanupTimeouts.delete(commandKey);
+  }
+  
   // Auto cleanup after 10 seconds (in case of error)
-  setTimeout(() => {
+  const timeoutId = setTimeout(() => {
     commandState.executingCommands.delete(commandKey);
+    commandState.cleanupTimeouts.delete(commandKey);
   }, 10000);
+  
+  commandState.cleanupTimeouts.set(commandKey, timeoutId);
   
   return true;
 };
 
 const finishCommand = (player: PlayerAugmented, command: string): void => {
   const commandKey = `${player.id}-${command}`;
+  
+  // Clear the executing command
   commandState.executingCommands.delete(commandKey);
+  
+  // Clear and remove the cleanup timeout since command completed normally
+  const timeoutId = commandState.cleanupTimeouts.get(commandKey);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+    commandState.cleanupTimeouts.delete(commandKey);
+  }
+};
+
+// Cleanup function for memory leak prevention
+const cleanupCommandState = (): void => {
+  try {
+    const now = Date.now();
+    const currentPlayers = new Set(room.getPlayerList().map(p => p.id));
+    let cleanedCount = 0;
+    
+    // Clean up lastCommandTime for players who left (older than 10 minutes)
+    for (const [playerId, lastTime] of commandState.lastCommandTime.entries()) {
+      if (!currentPlayers.has(playerId) && (now - lastTime > 600000)) { // 10 minutes
+        commandState.lastCommandTime.delete(playerId);
+        commandState.commandCooldowns.delete(playerId);
+        cleanedCount++;
+      }
+    }
+    
+    // Force cleanup if maps are getting too large
+    if (commandState.lastCommandTime.size > MAX_COMMAND_STATE_SIZE) {
+      console.warn(`[COMMAND] Command state too large (${commandState.lastCommandTime.size}), forcing cleanup`);
+      
+      // Keep only the most recent 500 entries
+      const entries = Array.from(commandState.lastCommandTime.entries())
+        .sort((a, b) => b[1] - a[1]) // Sort by timestamp descending
+        .slice(0, 500);
+      
+      commandState.lastCommandTime.clear();
+      commandState.commandCooldowns.clear();
+      
+      for (const [playerId, timestamp] of entries) {
+        commandState.lastCommandTime.set(playerId, timestamp);
+      }
+      
+      cleanedCount += MAX_COMMAND_STATE_SIZE - 500;
+    }
+    
+    if (cleanedCount > 0) {
+      console.log(`[COMMAND] Cleaned up ${cleanedCount} stale command state entries`);
+    }
+    
+    // Log current state size for monitoring
+    console.log(`[COMMAND] Current state sizes - Commands: ${commandState.executingCommands.size}, Times: ${commandState.lastCommandTime.size}, Timeouts: ${commandState.cleanupTimeouts.size}`);
+    
+  } catch (error) {
+    console.error(`[COMMAND] Error in command state cleanup: ${error}`);
+  }
+};
+
+// Regular cleanup interval to prevent memory leaks
+setInterval(cleanupCommandState, COMMAND_MEMORY_CLEANUP_INTERVAL);
+
+// Force cleanup on player leave
+export const cleanupPlayerCommands = (playerId: number): void => {
+  try {
+    // Remove all command state for this player
+    commandState.lastCommandTime.delete(playerId);
+    commandState.commandCooldowns.delete(playerId);
+    
+    // Clean up any executing commands for this player
+    const playerCommands = Array.from(commandState.executingCommands)
+      .filter(cmd => cmd.startsWith(`${playerId}-`));
+    
+    for (const cmd of playerCommands) {
+      commandState.executingCommands.delete(cmd);
+      
+      // Clear associated timeout
+      const timeoutId = commandState.cleanupTimeouts.get(cmd);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        commandState.cleanupTimeouts.delete(cmd);
+      }
+    }
+    
+    console.log(`[COMMAND] Cleaned up command state for player ${playerId}`);
+  } catch (error) {
+    console.error(`[COMMAND] Error cleaning up player commands: ${error}`);
+  }
 };
 
 // Enhanced admin commands with mutex protection

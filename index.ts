@@ -21,6 +21,7 @@ import { applyRotation } from "./src/rotateBall";
 import { defaults, getDuplicateBlockingEnabled } from "./src/settings";
 import { setAfkSystemEnabled, isAfkSystemEnabled } from "./src/afk";
 import { initPlayer } from "./src/welcome";
+import { cleanupPlayerCommands } from "./src/command";
 import * as crypto from "node:crypto";
 
 let finalScores: {red: number, blue: number} | null = null;
@@ -1216,12 +1217,14 @@ const roomBuilder = async (HBInit: Headless, args: RoomConfigObject) => {
       const leavingPlayer = toAug(p);
       players = players.filter((pp) => p.id != pp.id);
       await handlePlayerLeaveOrAFK(leavingPlayer);
+              cleanupPlayerCommands(leavingPlayer.id);
     } catch (error) {
       // Player was likely kicked before being properly added to players array
       console.warn(`[onPlayerLeave] Player ${p.id} not found in players array - likely kicked during join. Cleaning up anyway.`);
       players = players.filter((pp) => p.id != pp.id);
       // Still call handlePlayerLeaveOrAFK without the leavingPlayer object
       await handlePlayerLeaveOrAFK();
+              cleanupPlayerCommands(p.id);
     }
   };
 
