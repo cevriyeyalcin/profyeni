@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -44,27 +11,27 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.addToGame = exports.handlePlayerLeaveOrAFK = exports.changeDuringDraft = exports.duringDraft = void 0;
 const __1 = require("..");
-const fs = __importStar(require("fs"));
-const draft_1 = require("./draft/draft");
 const message_1 = require("./message");
 const __2 = require("..");
 const utils_1 = require("./utils");
 const __3 = require("..");
 const settings_1 = require("./settings");
-const elo_1 = require("./elo");
+const levels_1 = require("./levels");
+const teamChooser_1 = require("./teamChooser");
 /* This manages teams and players depending
  * on being during ranked game or draft phase. */
 const maxTeamSize = process.env.DEBUG ? 1 : settings_1.teamSize;
 let isRunning = false;
+// All games are now unranked with level progression
 let isRanked = false;
 exports.duringDraft = false;
 let changeDuringDraft = (m) => (exports.duringDraft = m);
 exports.changeDuringDraft = changeDuringDraft;
 const balanceTeams = () => {
-    if (exports.duringDraft || isRanked) {
+    if (exports.duringDraft) {
         return;
     }
-    // To be used only during unranked
+    // Balance teams by moving players to maintain equal numbers
     if (red().length > blue().length + 1) {
         __1.room.setPlayerTeam(red()[0].id, 2);
     }
@@ -72,44 +39,60 @@ const balanceTeams = () => {
         __1.room.setPlayerTeam(blue()[0].id, 1);
     }
 };
-const handlePlayerLeaveOrAFK = () => __awaiter(void 0, void 0, void 0, function* () {
+const handlePlayerLeaveOrAFK = (leftPlayer) => __awaiter(void 0, void 0, void 0, function* () {
+    // Handle team chooser if a player left
+    if (leftPlayer) {
+        (0, teamChooser_1.handlePlayerLeave)(leftPlayer);
+    }
     if (__1.players.filter((p) => !p.afk).length < 1) {
         __1.room.stopGame();
         (0, utils_1.sleep)(5000); // this is important to cancel all ongoing animations when match stops
         __1.room.startGame();
     }
     yield (0, utils_1.sleep)(100);
-    if (!exports.duringDraft && !isRanked) {
-        balanceTeams();
-    }
-    if (isRanked && !process.env.DEBUG) {
-        if ([...red(), ...blue()].length <= 2) {
-            isRanked = false;
-            (0, message_1.sendMessage)("Yalnızca 2 oyuncu kaldı. Sıralamalı oyun iptal ediliyor.");
+    if (!exports.duringDraft) {
+        // First try auto-balance (to spectators) for team chooser system
+        const autoBalanced = (0, teamChooser_1.checkAndAutoBalance)();
+        // If no auto-balance occurred, use traditional balance (between teams)
+        if (!autoBalanced) {
+            balanceTeams();
         }
+        // Check if waiting message should be shown after balancing
+        setTimeout(() => {
+            (0, teamChooser_1.checkAndShowWaitingMessage)();
+        }, 500);
     }
 });
 exports.handlePlayerLeaveOrAFK = handlePlayerLeaveOrAFK;
 const handleWin = (game, winnerTeamId) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const changes = yield (0, elo_1.changeElo)(game, winnerTeamId);
+        const changes = yield (0, levels_1.changeLevels)(game, winnerTeamId);
         changes.forEach((co) => {
             const p = __1.room.getPlayer(co.id);
             if (p) {
-                (0, message_1.sendMessage)(`Your ELO: ${(0, __3.toAug)(p).elo} → ${(0, __3.toAug)(p).elo + co.change} (${co.change > 0 ? "+" : ""}${co.change})`, p);
+                const playerAug = (0, __3.toAug)(p);
+                if (co.levelUp) {
+                    (0, message_1.sendMessage)(`🎉 Level Up! ${playerAug.name} → Lvl.${co.newLevel} (+${co.expGained} XP)`, null);
+                    (0, message_1.sendMessage)(`Your Level: Lvl.${playerAug.level} → Lvl.${co.newLevel} (+${co.expGained} XP)`, p);
+                }
+                else {
+                    (0, message_1.sendMessage)(`XP Gained: +${co.expGained} (${playerAug.experience}/${co.expNeeded} to Lvl.${playerAug.level + 1})`, p);
+                }
             }
         });
         changes.forEach((co) => {
             if (__1.players.map((p) => p.id).includes(co.id)) {
                 const pp = __1.room.getPlayer(co.id);
                 if (pp) {
-                    (0, __3.toAug)(pp).elo += co.change;
-                } // change elo on server just for showing in chat. when running two instances of the server, this may be not accurate, although it is always accurate in DB (because the changes and calculations are always based on DB data, not on in game elo. false elo will be corrected on reconnect.)
+                    const playerAug = (0, __3.toAug)(pp);
+                    playerAug.experience = co.newExperience;
+                    playerAug.level = co.newLevel;
+                }
             }
         });
     }
     catch (e) {
-        console.log("Error during handling ELO:", e);
+        console.log("Error during handling levels:", e);
     }
 });
 const red = () => __1.room.getPlayerList().filter((p) => p.team == 1);
@@ -118,21 +101,32 @@ const spec = () => __1.room.getPlayerList().filter((p) => p.team == 0);
 const both = () => __1.room.getPlayerList().filter((p) => p.team == 1 || p.team == 2);
 const ready = () => __1.room.getPlayerList().filter((p) => !(0, __3.toAug)(p).afk);
 const addToGame = (room, p) => {
-    if (__2.game && isRanked && [...red(), ...blue()].length <= maxTeamSize * 2) {
-        return;
-    }
     if (__2.game && ((0, __3.toAug)(p).cardsAnnounced >= 2 || (0, __3.toAug)(p).foulsMeter >= 2)) {
         return;
     }
     if (exports.duringDraft) {
         return;
     }
-    if (red().length > blue().length) {
-        room.setPlayerTeam(p.id, 2);
-    }
-    else {
+    // Only assign first 2 players to teams (1 red, 1 blue)
+    // All other players stay as spectators for team chooser system
+    const redCount = red().length;
+    const blueCount = blue().length;
+    const totalTeamPlayers = redCount + blueCount;
+    if (totalTeamPlayers === 0) {
+        // First player goes to red team
         room.setPlayerTeam(p.id, 1);
     }
+    else if (totalTeamPlayers === 1 && redCount === 1 && blueCount === 0) {
+        // Second player goes to blue team
+        room.setPlayerTeam(p.id, 2);
+    }
+    // All subsequent players (3rd, 4th, 5th...) stay as spectators (team 0)
+    // They will be chosen by teams using the team chooser system
+    // Check if we should show the waiting message
+    // Use a longer delay to allow validation checks to complete first
+    setTimeout(() => {
+        (0, teamChooser_1.checkAndShowWaitingMessage)();
+    }, 500); // Longer delay to ensure validation checks complete first
 };
 exports.addToGame = addToGame;
 const initChooser = (room) => {
@@ -180,7 +174,6 @@ const initChooser = (room) => {
     };
     const _onTeamVictory = room.onTeamVictory;
     room.onTeamVictory = (scores) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
         if (exports.duringDraft) {
             return;
         }
@@ -189,61 +182,26 @@ const initChooser = (room) => {
         }
         const winTeam = scores.red > scores.blue ? 1 : 2;
         const loseTeam = scores.red > scores.blue ? 2 : 1;
-        if (isRanked) {
-            if (!__2.game) {
-                return;
-            }
-            yield handleWin(__2.game, winTeam);
+        // Always handle level progression for all games
+        if (!__2.game) {
+            return;
         }
+        yield handleWin(__2.game, winTeam);
         (0, message_1.sendMessage)("Break time: 10 seconds.");
         yield (0, utils_1.sleep)(10000);
-        const winnerIds = room
-            .getPlayerList()
-            .filter((p) => p.team == winTeam)
-            .map((p) => p.id);
-        if (ready().length >= maxTeamSize * 2) {
-            const rd = ready();
-            exports.duringDraft = true;
-            room.getPlayerList().forEach((p) => room.setPlayerAvatar(p.id, ""));
-            const readyAndSorted = rd.sort((a, b) => (0, __3.toAug)(b).elo - (0, __3.toAug)(a).elo);
-            const draftResult = yield (0, draft_1.performDraft)(room, readyAndSorted, maxTeamSize, (p) => ((0, __3.toAug)(p).afk = true));
-            const rsStadium = fs.readFileSync("./maps/rs5.hbs", {
-                encoding: "utf8",
-                flag: "r",
-            });
-            room.setCustomStadium(rsStadium);
-            room.getPlayerList().forEach((p) => {
-                if (p.team != 0) {
-                    room.setPlayerTeam(p.id, 0);
-                }
-            });
-            (_a = draftResult === null || draftResult === void 0 ? void 0 : draftResult.red) === null || _a === void 0 ? void 0 : _a.forEach((p) => room.setPlayerTeam(p.id, 1));
-            (_b = draftResult === null || draftResult === void 0 ? void 0 : draftResult.blue) === null || _b === void 0 ? void 0 : _b.forEach((p) => room.setPlayerTeam(p.id, 2));
-            exports.duringDraft = false;
-            if (((_c = draftResult === null || draftResult === void 0 ? void 0 : draftResult.red) === null || _c === void 0 ? void 0 : _c.length) == maxTeamSize &&
-                ((_d = draftResult === null || draftResult === void 0 ? void 0 : draftResult.blue) === null || _d === void 0 ? void 0 : _d.length) == maxTeamSize) {
-                isRanked = true;
-                (0, message_1.sendMessage)("Ranked game.");
+        // Simple team balancing - no more draft system
+        isRanked = false; // All games are unranked with level progression
+        let i = 0;
+        ready().forEach((p) => {
+            if (i % 2) {
+                room.setPlayerTeam(p.id, 2);
             }
             else {
-                (0, message_1.sendMessage)("Unranked game.");
-                isRanked = false;
-                refill();
+                room.setPlayerTeam(p.id, 1);
             }
-        }
-        else {
-            isRanked = false;
-            let i = 0;
-            ready().forEach((p) => {
-                if (i % 2) {
-                    room.setPlayerTeam(p.id, 2);
-                }
-                else {
-                    room.setPlayerTeam(p.id, 1);
-                }
-                i++;
-            });
-        }
+            i++;
+        });
+        (0, message_1.sendMessage)("New game starting with level progression!");
         room.startGame();
     });
 };

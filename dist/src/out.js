@@ -16,6 +16,7 @@ const utils_1 = require("./utils");
 const foul_1 = require("./foul");
 const settings_2 = require("./settings");
 const teamplayBoost_1 = require("./teamplayBoost");
+const teamChooser_1 = require("./teamChooser");
 const blink = (game, savedEventCounter, forTeam) => __awaiter(void 0, void 0, void 0, function* () {
     for (let i = 0; i < 140; i++) {
         if (!index_1.room.getScores()) {
@@ -62,6 +63,26 @@ const handleBallOutOfBounds = (game) => {
         }
         // Normal out-of-bounds handling when no advantage active
         throwFakeBall(ball);
+        // After setting up the throw-in/corner, check for team selection
+        let selectionTriggered = false;
+        if ((0, teamChooser_1.checkAndAutoBalance)()) {
+            // Auto-balancing occurred, trigger selection if spectators are now available
+            if ((0, teamChooser_1.shouldTriggerSelection)()) {
+                (0, teamChooser_1.startSelection)();
+                selectionTriggered = true;
+            }
+        }
+        else {
+            // Check if team selection should be triggered
+            if ((0, teamChooser_1.shouldTriggerSelection)()) {
+                (0, teamChooser_1.startSelection)();
+                selectionTriggered = true;
+            }
+        }
+        // If selection was triggered, return early (throw-in is already set up)
+        if (selectionTriggered) {
+            return;
+        }
         if (isOutLeft) {
             // LEFT BORDER
             if (lastTouchTeamId == 1) {
@@ -229,6 +250,21 @@ const throwIn = (game, forTeam, pos) => __awaiter(void 0, void 0, void 0, functi
     throwIn(game, newForTeam, pos);
 });
 const freeKick = (game, forTeam, pos) => __awaiter(void 0, void 0, void 0, function* () {
+    // Check if teams need auto-balancing first
+    if ((0, teamChooser_1.checkAndAutoBalance)()) {
+        // Auto-balancing occurred, trigger selection if spectators are now available
+        if ((0, teamChooser_1.shouldTriggerSelection)()) {
+            (0, teamChooser_1.startSelection)();
+            return; // Selection will handle game resumption
+        }
+    }
+    else {
+        // Check if team selection should be triggered before free kick
+        if ((0, teamChooser_1.shouldTriggerSelection)()) {
+            (0, teamChooser_1.startSelection)();
+            return; // Selection will handle game resumption
+        }
+    }
     (0, foul_1.announceCards)(game);
     index_1.room.pauseGame(true);
     index_1.room.pauseGame(false);
@@ -453,6 +489,21 @@ const throwRealBall = (game, forTeam, toPos, evCounter) => __awaiter(void 0, voi
     }
 });
 const penalty = (game, forTeam, fouledAt) => __awaiter(void 0, void 0, void 0, function* () {
+    // Check if teams need auto-balancing first
+    if ((0, teamChooser_1.checkAndAutoBalance)()) {
+        // Auto-balancing occurred, trigger selection if spectators are now available
+        if ((0, teamChooser_1.shouldTriggerSelection)()) {
+            (0, teamChooser_1.startSelection)();
+            return; // Selection will handle game resumption
+        }
+    }
+    else {
+        // Check if team selection should be triggered before penalty
+        if ((0, teamChooser_1.shouldTriggerSelection)()) {
+            (0, teamChooser_1.startSelection)();
+            return; // Selection will handle game resumption
+        }
+    }
     const pos = { x: Math.sign(fouledAt.x) * settings_2.penaltyPoint.x, y: settings_2.penaltyPoint.y };
     (0, foul_1.announceCards)(game);
     const oppTeam = forTeam == 1 ? 2 : 1;

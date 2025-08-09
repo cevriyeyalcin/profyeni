@@ -73,11 +73,25 @@ export const shouldTriggerSelection = (): boolean => {
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
+  // Additional validation: ensure spectators are actually valid and online
+  const validSpectators = spectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      console.warn(`[shouldTriggerSelection] Player ${p.id} validation failed, removing from spectators`);
+      return false;
+    }
+  });
+  
   // If teams are balanced, require at least 2 spectators to avoid false triggers when someone joins/leaves temporarily
   const minSpectators = Math.abs(redCount - blueCount) === 0 ? 2 : 1;
   
-  // Need enough spectators, teams not full (max 6 per team), and teams should be reasonably balanced
-  return spectators.length >= minSpectators && 
+  // Need enough valid spectators, teams not full (max 6 per team), and teams should be reasonably balanced
+  return validSpectators.length >= minSpectators && 
          (redCount < 6 || blueCount < 6) && 
          Math.abs(redCount - blueCount) <= 2; // Allow up to 2 player difference
 };
@@ -91,15 +105,42 @@ export const checkAndShowWaitingMessage = (): void => {
   const now = Date.now();
   if (now - lastWaitingMessageTime < WAITING_MESSAGE_COOLDOWN) return;
   
+  // Get current valid spectators (non-AFK)
+  const spectators = getSpectators();
+  const redCount = getRedPlayers().length;
+  const blueCount = getBluePlayers().length;
+  
+  // Additional validation: ensure spectators are actually valid and online
+  const validSpectators = spectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      console.warn(`[checkAndShowWaitingMessage] Player ${p.id} validation failed, removing from spectators`);
+      return false;
+    }
+  });
+  
+  // Update the trigger condition to use validated spectators
+  const minSpectators = Math.abs(redCount - blueCount) === 0 ? 2 : 1;
+  const shouldTrigger = validSpectators.length >= minSpectators && 
+                       (redCount < 6 || blueCount < 6) && 
+                       Math.abs(redCount - blueCount) <= 2;
+  
   // Only show if selection should be triggered but isn't active yet
-  if (shouldTriggerSelection()) {
-    const spectators = getSpectators();
-    const message = `🟡 Top dışarıya çıkınca oyuncu değişikliği yapılacak. (${spectators.length} izleyici bekleniyor)`;
+  if (shouldTrigger) {
+    const message = `🟡 Top dışarıya çıkınca oyuncu değişikliği yapılacak. (${validSpectators.length} izleyici bekleniyor)`;
     
     // Send to all players as a bold yellow announcement
     room.sendAnnouncement(message, undefined, 0xFFFF00, "bold", 1);
     lastWaitingMessageTime = now;
-    console.log(`[TEAM_CHOOSER] Waiting for ball out - ${spectators.length} spectators ready`);
+    console.log(`[TEAM_CHOOSER] Waiting for ball out - ${validSpectators.length} valid spectators ready`);
+  } else if (spectators.length > 0 && validSpectators.length === 0) {
+    // All spectators are AFK or invalid - log this situation
+    console.log(`[TEAM_CHOOSER] Found ${spectators.length} spectators but none are valid (likely AFK or left)`);
   }
 };
 
@@ -107,26 +148,46 @@ export const checkAndShowWaitingMessage = (): void => {
 export const checkAndAutoBalance = (): boolean => {
   const redPlayers = getRedPlayers();
   const bluePlayers = getBluePlayers();
-  const spectators = getSpectators();
+  const rawSpectators = getSpectators();
+  
+  // Validate spectators to exclude AFK/invalid ones
+  const validSpectators = rawSpectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      return false;
+    }
+  });
   
   const redCount = redPlayers.length;
   const blueCount = bluePlayers.length;
-  const specCount = spectators.length;
+  const specCount = validSpectators.length; // Use validated spectators count
   
-  console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Spectators: ${specCount}`);
-  
+  // Only log when there's actually something to report or when counts have changed significantly
   const teamDifference = Math.abs(redCount - blueCount);
+  
+  // Reduce console spam - only log when teams are significantly uneven or when there are valid spectators
+  if (teamDifference > 0 || specCount > 0) {
+    console.log(`[AUTO_BALANCE] Team counts - Red: ${redCount}, Blue: ${blueCount}, Valid Spectators: ${specCount}${rawSpectators.length !== specCount ? ` (${rawSpectators.length - specCount} AFK/invalid)` : ''}`);
+  }
   
   // Don't balance if teams are already equal
   if (teamDifference === 0) {
-    console.log(`[AUTO_BALANCE] Teams are balanced - no action needed`);
+    // Only log if there was something to balance
+    if (specCount > 0) {
+      console.log(`[AUTO_BALANCE] Teams are balanced - no action needed`);
+    }
     return false;
   }
   
-  // If there are spectators available, don't auto-balance (let team chooser handle it)
+  // If there are valid spectators available, don't auto-balance (let team chooser handle it)
   // This function is for moving players FROM teams TO spectators, not the other way around
   if (specCount > 0) {
-    console.log(`[AUTO_BALANCE] Teams uneven but spectators available - let team chooser handle this`);
+    console.log(`[AUTO_BALANCE] Teams uneven but ${specCount} valid spectators available - let team chooser handle this`);
     return false; // Let the team chooser system handle it
   }
   
@@ -169,21 +230,40 @@ export const checkAndAutoBalance = (): boolean => {
   return false;
 };
 
-// Start the selection process
+// Start team selection process
 export const startSelection = (): void => {
-  if (chooserState.isActive) return;
+  if (chooserState.isActive) {
+    console.log(`[TEAM_CHOOSER] Selection already active, ignoring start request`);
+    return;
+  }
   
-  const spectators = getSpectators();
-  if (spectators.length < 2) return;
+  // Get and validate current spectators before starting
+  const rawSpectators = getSpectators();
+  const validSpectators = rawSpectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) return false; // Player left
+      
+      const augPlayer = toAug(playerObj);
+      return !augPlayer.afk && playerObj.team === 0; // Double-check not AFK and still spectator
+    } catch (error) {
+      console.warn(`[startSelection] Player ${p.id} validation failed, removing from spectators`);
+      return false;
+    }
+  });
   
-  const { red, blue } = getTeamMembers();
-  if (red.length === 0 || blue.length === 0) return;
+  // Don't start if no valid spectators
+  if (validSpectators.length === 0) {
+    console.log(`[TEAM_CHOOSER] No valid spectators available for selection (${rawSpectators.length} raw spectators found but all AFK/invalid)`);
+    return;
+  }
   
-  // Pause the game
+  // Pause game
   room.pauseGame(true);
   
+  // Set state
   chooserState.isActive = true;
-  chooserState.availableSpectators = spectators.map(p => {
+  chooserState.availableSpectators = validSpectators.map(p => {
     try {
       return toAug(p);
     } catch (error) {
@@ -192,10 +272,21 @@ export const startSelection = (): void => {
     }
   }).filter(p => p !== null) as PlayerAugmented[];
   
-  // Determine which teams can choose based on balance
+  // Additional safety check after mapping
+  if (chooserState.availableSpectators.length === 0) {
+    console.log(`[TEAM_CHOOSER] No spectators remain after augmentation mapping, cancelling selection`);
+    chooserState.isActive = false;
+    room.pauseGame(false);
+    return;
+  }
+  
+  console.log(`[TEAM_CHOOSER] Starting selection with ${chooserState.availableSpectators.length} valid spectators:`, 
+    chooserState.availableSpectators.map(s => `${s.name}(${s.id})`));
+  
   const redCount = getRedPlayers().length;
   const blueCount = getBluePlayers().length;
   
+  // Determine which teams can choose
   if (redCount < blueCount) {
     // Red team is disadvantaged, only they can choose until balanced
     chooserState.waitingForRed = true;
@@ -536,3 +627,41 @@ export const handlePlayerLeave = (player: PlayerAugmented): void => {
     }
   }
 };
+
+// Clean up stale spectator data to prevent false triggers and console spam
+export const cleanupStaleSpectators = (): void => {
+  // Only run if we're not in an active selection
+  if (chooserState.isActive) return;
+  
+  const currentSpectators = getSpectators();
+  let removedCount = 0;
+  
+  // Validate each spectator and count removals
+  const validSpectators = currentSpectators.filter(p => {
+    try {
+      const playerObj = room.getPlayer(p.id);
+      if (!playerObj) {
+        removedCount++;
+        return false; // Player left
+      }
+      
+      const augPlayer = toAug(playerObj);
+      if (augPlayer.afk || playerObj.team !== 0) {
+        removedCount++;
+        return false; // Player is AFK or changed teams
+      }
+      
+      return true;
+    } catch (error) {
+      removedCount++;
+      return false;
+    }
+  });
+  
+  if (removedCount > 0) {
+    console.log(`[TEAM_CHOOSER] Cleaned up ${removedCount} stale spectators. Valid spectators remaining: ${validSpectators.length}`);
+  }
+};
+
+// Auto-cleanup every 30 seconds to prevent stale data buildup
+setInterval(cleanupStaleSpectators, 30000);
