@@ -77,6 +77,35 @@ export const checkAndShowWaitingMessage = (): void => {
   }
 };
 
+// Immediate balance function - handles critical scenarios like 1v0 
+export const handleImmediateBalancing = (): boolean => {
+  const redPlayers = getRedPlayers();
+  const bluePlayers = getBluePlayers();
+  const spectators = getSpectators();
+  
+  const redCount = redPlayers.length;
+  const blueCount = bluePlayers.length;
+  const specCount = spectators.length;
+  
+  // Handle critical scenarios immediately (like 1v0, 0v1)
+  if ((redCount === 0 && blueCount > 0) || (blueCount === 0 && redCount > 0)) {
+    if (specCount > 0) {
+      const needsPlayer = redCount === 0 ? 1 : 2; // 1 = red team, 2 = blue team
+      const firstSpec = spectators[0];
+      
+      console.log(`[IMMEDIATE_BALANCE] Critical imbalance (${redCount}v${blueCount}), moving spectator ${firstSpec.name} to team ${needsPlayer}`);
+      room.setPlayerTeam(firstSpec.id, needsPlayer);
+      
+      const teamName = needsPlayer === 1 ? "Kırmızı" : "Mavi";
+      sendMessage(`⚖️ Kritik dengesizlik! ${firstSpec.name}, ${teamName} takımına otomatik atandı.`, null);
+      
+      return true;
+    }
+  }
+  
+  return false;
+};
+
 // Check if teams are uneven and auto-balance by moving players to spectators
 export const checkAndAutoBalance = (): boolean => {
   const redPlayers = getRedPlayers();

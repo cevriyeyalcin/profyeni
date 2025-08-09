@@ -66,18 +66,23 @@ export const handleBallOutOfBounds = (game: Game) => {
       return; // Exit early - don't do normal throw-in/corner/goal kick
     }
     
-    // Check if teams need auto-balancing first
-    if (checkAndAutoBalance()) {
-      // Auto-balancing occurred, trigger selection if spectators are now available
-      if (shouldTriggerSelection()) {
-        startSelection();
-        return; // Selection will handle game resumption
-      }
-    } else {
-      // Check if team selection should be triggered
-      if (shouldTriggerSelection()) {
-        startSelection();
-        return; // Selection will handle game resumption
+    // Only check balance/selection once per ball-out event to prevent spam
+    if (!game.balanceCheckedForCurrentOut) {
+      game.balanceCheckedForCurrentOut = true;
+      
+      // Check if teams need auto-balancing first
+      if (checkAndAutoBalance()) {
+        // Auto-balancing occurred, trigger selection if spectators are now available
+        if (shouldTriggerSelection()) {
+          startSelection();
+          return; // Selection will handle game resumption
+        }
+      } else {
+        // Check if team selection should be triggered
+        if (shouldTriggerSelection()) {
+          startSelection();
+          return; // Selection will handle game resumption
+        }
       }
     }
     
